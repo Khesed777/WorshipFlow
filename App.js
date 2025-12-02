@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { 
     View, TextInput, Button, Text, StyleSheet, Alert, 
     ScrollView, FlatList, Pressable, Modal, TouchableOpacity, 
-    Platform, StatusBar, Image 
+    Platform, StatusBar, Image, BackHandler 
 } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import { initDB } from './src/database'; 
@@ -169,6 +169,49 @@ export default function App() {
         }
     }, [db, loadAllData]);
 
+    // --- Android Back Button Handling ---
+    useEffect(() => {
+        const onBackPress = () => {
+            // If any modal or submenu is open, close it and do not exit app
+            if (modalVisible) {
+                setModalVisible(false);
+                return true;
+            }
+            if (songFormModalVisible) {
+                setSongFormModalVisible(false);
+                return true;
+            }
+            if (setlistFormModalVisible) {
+                setSetlistFormModalVisible(false);
+                return true;
+            }
+            if (pictureScreenVisible) {
+                setPictureScreenVisible(false);
+                return true;
+            }
+            if (allSongsScreenVisible) {
+                setAllSongsScreenVisible(false);
+                return true;
+            }
+            if (currentSetlist) {
+                setCurrentSetlist(null);
+                setIsCollapsed(true);
+                return true;
+            }
+            // If on main menu, prompt before exiting
+            Alert.alert(
+                'Exit App',
+                'Are you sure you want to exit?',
+                [
+                    { text: 'Cancel', style: 'cancel', onPress: () => {} },
+                    { text: 'Exit', style: 'destructive', onPress: () => BackHandler.exitApp() },
+                ]
+            );
+            return true; // Prevent default exit
+        };
+        const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+        return () => subscription.remove();
+    }, [modalVisible, songFormModalVisible, setlistFormModalVisible, pictureScreenVisible, allSongsScreenVisible, currentSetlist]);
 
     const addSong = () => {
         if (!title || !artist) { Alert.alert('Validation', 'Please enter at least title and artist.'); return; }
@@ -528,6 +571,24 @@ export default function App() {
                             </View>
                         </ScrollView>
                         <View style={styles.fabContainer}>
+                            {/* App Info FAB (inside collapsible FAB menu) */}
+                            {!isCollapsed && (
+                                <Pressable
+                                    style={[styles.fabOptionMinimal, { backgroundColor: '#e3f0fa', flexDirection: 'row', alignItems: 'center' }]}
+                                    onPress={() => {
+                                        Alert.alert(
+                                            'App Information',
+                                            'Prepared by: Team JJJM (Group 1)\nJainie M. Eking\nJohari Gandawali\nMickey Nadayag\nJade B. Ramos\n\nUniversity of Science and Technology of Southern Philippines\nMain Campus - Alubijid\n\nPassed for Software Engineering Project\n2025',
+                                            [
+                                                { text: 'OK', style: 'default' }
+                                            ]
+                                        );
+                                    }}
+                                >
+                                    <Text style={{ color: '#2196F3', fontWeight: 'bold', fontSize: 18, marginRight: 8 }}>i</Text>
+                                    <Text style={{ color: '#2196F3', fontWeight: '600', fontSize: 15 }}>App Info</Text>
+                                </Pressable>
+                            )}
                             {!isCollapsed && (
                                 <Pressable style={[styles.fabOptionMinimal]} onPress={openSetlistFormModal}>
                                     <Text style={styles.fabTextMinimal}>Create Setlist</Text>
