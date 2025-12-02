@@ -11,7 +11,20 @@ import Metronome from './Metronome';
 
 // --- Component: AllSongsScreen ---
 const AllSongsScreen = ({ songs, onSongPress, onClose }) => {
-    
+    const [search, setSearch] = useState("");
+    // Comprehensive search across all fields
+    const filteredSongs = songs.filter(song => {
+        const q = search.toLowerCase();
+        return (
+            song.title?.toLowerCase().includes(q) ||
+            song.artist?.toLowerCase().includes(q) ||
+            song.key?.toLowerCase().includes(q) ||
+            song.lyrics?.toLowerCase().includes(q) ||
+            song.category?.toLowerCase().includes(q) ||
+            song.type?.toLowerCase().includes(q)
+        );
+    });
+
     const renderSongItem = ({ item }) => (
         <Pressable 
             style={styles.setlistItemCard} 
@@ -25,15 +38,24 @@ const AllSongsScreen = ({ songs, onSongPress, onClose }) => {
 
     return (
         <View style={styles.allSongsContainer}>
-            <Text style={styles.allSongsHeading}>All Saved Songs ({songs.length})</Text>
+            <Text style={styles.allSongsHeading}>All Saved Songs ({filteredSongs.length})</Text>
+            <TextInput
+                style={[styles.input, {marginBottom: 10, borderColor: '#b3c6e6', backgroundColor: '#e3f0fa'}]}
+                placeholder="Search by title, artist, key, lyrics, etc."
+                placeholderTextColor="#7bb6f7"
+                value={search}
+                onChangeText={setSearch}
+                autoCorrect={false}
+                autoCapitalize="none"
+            />
             <View style={styles.separator} />
             <FlatList
-                data={songs}
+                data={filteredSongs}
                 renderItem={renderSongItem}
                 keyExtractor={item => item.song_id.toString()}
                 style={styles.list}
                 contentContainerStyle={styles.listContent}
-                ListEmptyComponent={<Text style={styles.emptyList}>No songs saved. Add one from the home screen!</Text>}
+                ListEmptyComponent={<Text style={styles.emptyList}>No songs found. Try a different search!</Text>}
             />
             <TouchableOpacity
                 style={[styles.closeButton, styles.closeModalButton, {maxHeight: 50, marginTop: 20, marginBottom: 20 }]}
@@ -47,25 +69,32 @@ const AllSongsScreen = ({ songs, onSongPress, onClose }) => {
 
 // --- Component: AddPictureScreen (Practice Resources) ---
 const AddPictureScreen = ({ onClose }) => {
-    // Placeholder image URI - replace with actual resource if needed
     return (
-        <ScrollView contentContainerStyle={styles.pictureScreenContainer} style={styles.scrollContainer}>
-            <Text style={styles.pictureScreenHeading}>Worship Flow Resources</Text>
-             <Metronome />
-             <Image source={require('./assets/myImage.jpg')} style={{ width: 300, height: 400 }} />
-           {/* You may want to insert the placeholder image here: */}
-            {/* <Image source={{ uri: placeholderImageUri }} style={styles.resourceImage} /> */}
-           
-            
+        <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f7fbff', padding: 24 }} style={{ backgroundColor: '#f7fbff' }}>
+            <Text style={{ fontSize: 28, fontWeight: 'bold', color: '#2196F3', marginBottom: 6, letterSpacing: 1, marginTop: 20 }}>Practice Resources</Text>
+            <Text style={{ color: '#7bb6f7', fontSize: 15, marginBottom: 18, textAlign: 'center', maxWidth: 320 }}>
+                Tools to help your worship team prepare and flow smoothly.
+            </Text>
+            <View style={{ width: '100%', alignItems: 'center', backgroundColor: '#e3f0fa', borderRadius: 18, padding: 18, marginBottom: 24 }}>
+                <Text style={{ fontSize: 18, fontWeight: '600', color: '#2196F3', marginBottom: 10 }}>Metronome</Text>
+                <Metronome />
+            </View>
+            <View style={{ width: '100%', backgroundColor: '#e3f0fa', borderRadius: 18, padding: 0, marginBottom: 24, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                <ScrollView horizontal={false} contentContainerStyle={{ alignItems: 'center', justifyContent: 'center' }} style={{ width: '100%' }}>
+                    <Image
+                        source={require('./assets/myImage.jpg')}
+                        style={{ width: '100%', height: undefined, aspectRatio: 3/4, maxHeight: 500, resizeMode: 'contain', borderRadius: 12, backgroundColor: '#f7fbff' }}
+                    />
+                </ScrollView>
+            </View>
             <TouchableOpacity
-                style={[styles.closeButton, styles.closeModalButton, {maxHeight: 50, marginTop: 30 }]}
+                style={{ backgroundColor: '#2196F3', borderRadius: 16, paddingVertical: 14, paddingHorizontal: 32, marginTop: 10, marginBottom: 10 }}
                 onPress={onClose}
             >
-                <Text style={styles.closeButtonText}>Return to Home</Text>
+                <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>Return to Home</Text>
             </TouchableOpacity>
         </ScrollView>
     );
-    
 };
 
 // --- Component: App ---
@@ -85,6 +114,8 @@ export default function App() {
     const [pictureScreenVisible, setPictureScreenVisible] = useState(false); 
     const [allSongsScreenVisible, setAllSongsScreenVisible] = useState(false); 
     const [selectedSong, setSelectedSong] = useState(null); 
+    const [modalProgramParts, setModalProgramParts] = useState([]); // parts passed when opening modal
+    const [modalCurrentPartIndex, setModalCurrentPartIndex] = useState(null);
     
     const [isCollapsed, setIsCollapsed] = useState(true);
 
@@ -96,6 +127,9 @@ export default function App() {
     const [type, setType] = useState('');
     const [setlistName, setSetlistName] = useState('');
     const [setlistDescription, setSetlistDescription] = useState('');
+
+    const [sortOldestFirst, setSortOldestFirst] = useState(false);
+    const [lyricsFontSize, setLyricsFontSize] = useState(16);
 
     const loadAllData = useCallback(async () => {
         if (!db) return; 
@@ -391,9 +425,17 @@ export default function App() {
         setModalVisible(true);
     };
     
-    const handleViewSongDetails = (songId) => {
+    const handleViewSongDetails = (songId, partsList = null, partIndex = null) => {
         const song = songs.find(s => s.song_id === songId);
         if (song) {
+            // If a parts list and index were provided, store them to enable "Next Part" navigation
+            if (Array.isArray(partsList) && Number.isInteger(partIndex)) {
+                setModalProgramParts(partsList);
+                setModalCurrentPartIndex(partIndex);
+            } else {
+                setModalProgramParts([]);
+                setModalCurrentPartIndex(null);
+            }
             handleSongPress(song);
         } else {
             Alert.alert('Error', 'Song details not found.');
@@ -432,113 +474,134 @@ export default function App() {
 
 
     return (
-        <View style={styles.container}>
-            
-            {currentSetlist ? (
-                <SetlistDetailScreen
-                    currentSetlist={currentSetlist}
-                    programParts={programParts.filter(p => p.setlist_id === currentSetlist.setlist_id)}
-                    songLibrary={songs} 
-                    handleHomePress={handleHomePress}
-                    addProgramPart={addProgramPart} 
-                    handleDeletePart={handleDeletePart} 
-                    voiceMemos={voiceMemos.filter(m => m.setlist_id === currentSetlist.setlist_id)}
-                    addVoiceMemo={addVoiceMemo}
-                    deleteVoiceMemo={deleteVoiceMemo} 
-                    updateSongForPart={updateSongForPart} 
-                    handleViewSongDetails={handleViewSongDetails}
-                    deleteSetlist={deleteSetlist} 
-                />
-            ) : (
-                
-                <View style={styles.homeScreenWrapper}>
-                    <ScrollView contentContainerStyle={styles.scrollContent}> 
-                        <Text style={styles.heading}>Worship Flow</Text>
-                        <View style={styles.separator} />
-                        <Text style={[styles.cardDetail, {marginLeft: '5%', marginBottom: 15}]}>
-                            Tap a Setlist to view the program details.
-                        </Text>
-
-                        <View key={`setlist-list-wrapper-${renderKey}`} style={styles.listWrapper}>
-                            <FlatList
-                                data={setlists}
-                                renderItem={renderSetlistItem}
-                                keyExtractor={item => item.setlist_id.toString()}
-                                style={styles.list}
-                                scrollEnabled={false} 
-                                ListEmptyComponent={<Text style={styles.emptyList}>No setlists saved. Tap '+' to create one.</Text>}
-                            />
-                        </View>
-                        <View style={styles.miniSeparator} />
-                        
-                    </ScrollView>
-
-                    <View style={styles.fabContainer}>
-                        {!isCollapsed && (
-                            <Pressable style={styles.fabOption} onPress={openSetlistFormModal}>
-                                <Text style={styles.fabText}>Create Setlist</Text>
-                            </Pressable>
-                        )}
-                        {!isCollapsed && (
-                            <Pressable 
-                                style={styles.fabOption} 
-                                onPress={() => {
-                                    setIsCollapsed(true);
-                                    setSongFormModalVisible(true); 
-                                }}
-                            >
-                                <Text style={styles.fabText}>Add New Song</Text>
-                            </Pressable>
-                        )}
-                        {!isCollapsed && (
-                            <Pressable style={styles.fabOption} onPress={openAllSongsScreen}>
-                                <Text style={styles.fabText}>View All Songs</Text>
-                            </Pressable>
-                        )}
+        <View style={styles.minimalBg}>
+            {/* Minimalist background shape */}
+            <View style={styles.bgShape1} pointerEvents="none" />
+            <View style={styles.container}>
+                {currentSetlist ? (
+                    <SetlistDetailScreen
+                        currentSetlist={currentSetlist}
+                        programParts={programParts.filter(p => p.setlist_id === currentSetlist.setlist_id)}
+                        songLibrary={songs}
+                        handleHomePress={handleHomePress}
+                        addProgramPart={addProgramPart}
+                        handleDeletePart={handleDeletePart}
+                        voiceMemos={voiceMemos.filter(m => m.setlist_id === currentSetlist.setlist_id)}
+                        addVoiceMemo={addVoiceMemo}
+                        deleteVoiceMemo={deleteVoiceMemo}
+                        updateSongForPart={updateSongForPart}
+                        handleViewSongDetails={handleViewSongDetails}
+                        deleteSetlist={deleteSetlist}
+                    />
+                ) : (
+                    <View style={styles.homeScreenWrapper}>
+                        <ScrollView contentContainerStyle={styles.scrollContent}>
+                            <View style={styles.heroHeaderMinimal}>
+                                <Text style={styles.headingMinimal}>Worship Flow</Text>
+                                <Text style={styles.heroSubtextMinimal}>Your worship setlist manager</Text>
+                            </View>
+                            <Text style={[styles.cardDetail, styles.homeHintMinimal]}>Tap a Setlist to view</Text>
+                            {/* Sort Toggle */}
+                            <View style={{ width: '95%', alignItems: 'flex-end', marginBottom: 4 }}>
+                                <TouchableOpacity
+                                    style={{ backgroundColor: '#e3f0fa', borderRadius: 10, paddingVertical: 6, paddingHorizontal: 16, marginBottom: 2 }}
+                                    onPress={() => setSortOldestFirst(v => !v)}
+                                >
+                                    <Text style={{ color: '#2196F3', fontWeight: '600', fontSize: 14 }}>
+                                        {sortOldestFirst ? 'Sort: Oldest → Newest' : 'Sort: Newest → Oldest'}
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
+                            <View key={`setlist-list-wrapper-${renderKey}`} style={styles.listWrapper}>
+                                <FlatList
+                                    data={[...setlists].sort((a, b) => sortOldestFirst ? new Date(a.date_created) - new Date(b.date_created) : new Date(b.date_created) - new Date(a.date_created))}
+                                    renderItem={({ item }) => (
+                                        <View style={styles.setlistCardMinimal}>
+                                            {renderSetlistItem({ item })}
+                                        </View>
+                                    )}
+                                    keyExtractor={item => item.setlist_id.toString()}
+                                    style={styles.list}
+                                    scrollEnabled={false}
+                                    ListEmptyComponent={<Text style={styles.emptyList}>No setlists saved. Tap '+' to create one.</Text>}
+                                />
+                            </View>
+                        </ScrollView>
+                        <View style={styles.fabContainer}>
                             {!isCollapsed && (
-                            <Pressable style={styles.fabOption} onPress={openPictureScreen}>
-                                <Text style={styles.fabText}>Practice Resources</Text>
-                            </Pressable>
-                        )}
-                        <TouchableOpacity
-                            style={styles.fabMain}
-                            onPress={() => setIsCollapsed(!isCollapsed)}
-                        >
-                            <Text style={styles.fabMainText}>{isCollapsed ? '+' : 'x'}</Text>
-                        </TouchableOpacity>
+                                <Pressable style={[styles.fabOptionMinimal]} onPress={openSetlistFormModal}>
+                                    <Text style={styles.fabTextMinimal}>Create Setlist</Text>
+                                </Pressable>
+                            )}
+                            {!isCollapsed && (
+                                <Pressable
+                                    style={[styles.fabOptionMinimal]}
+                                    onPress={() => {
+                                        setIsCollapsed(true);
+                                        setSongFormModalVisible(true);
+                                    }}
+                                >
+                                    <Text style={styles.fabTextMinimal}>Add New Song</Text>
+                                </Pressable>
+                            )}
+                            {!isCollapsed && (
+                                <Pressable style={[styles.fabOptionMinimal]} onPress={openAllSongsScreen}>
+                                    <Text style={styles.fabTextMinimal}>View All Songs</Text>
+                                </Pressable>
+                            )}
+                            {!isCollapsed && (
+                                <Pressable style={[styles.fabOptionMinimal]} onPress={openPictureScreen}>
+                                    <Text style={styles.fabTextMinimal}>Practice Resources</Text>
+                                </Pressable>
+                            )}
+                            <TouchableOpacity
+                                style={styles.fabMainMinimal}
+                                onPress={() => setIsCollapsed(!isCollapsed)}
+                            >
+                                <Text style={styles.fabMainTextMinimal}>{isCollapsed ? '+' : 'x'}</Text>
+                            </TouchableOpacity>
+                        </View>
                     </View>
-                </View>
-            )}
-
+                )}
+            </View>
             <Modal
                 animationType="slide"
-                transparent={false}
+                transparent={true}
                 visible={setlistFormModalVisible}
                 onRequestClose={() => setSetlistFormModalVisible(false)}
             >
-                <View style={styles.formModalView}>
-                    <Text style={styles.formHeading}>Create New Setlist</Text>
-                    <TextInput 
-                        style={styles.input} 
-                        placeholder="Setlist Name (Required)" 
-                        value={setlistName} 
-                        onChangeText={setSetlistName} 
-                    />
-                    <TextInput
-                        style={[styles.input, styles.multilineSmall]}
-                        placeholder="Description (Optional)"
-                        value={setlistDescription}
-                        onChangeText={setSetlistDescription}
-                        multiline
-                    />
-                    <Button title="Save Setlist" onPress={addSetlist} color="#2196F3" />
-
-                    <TouchableOpacity
-                        style={[styles.closeButton, {maxHeight: 40, marginTop: 20, backgroundColor: '#ff2600ff' }]}
-                        onPress={() => setSetlistFormModalVisible(false)}
-                    >
-                        <Text style={styles.closeButtonText}>Cancel</Text>
-                    </TouchableOpacity>
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(33,150,243,0.08)' }}>
+                    <View style={{ width: '90%', backgroundColor: '#fff', borderRadius: 18, padding: 28, alignItems: 'center', shadowColor: '#2196F3', shadowOpacity: 0.08, shadowRadius: 12, elevation: 8 }}>
+                        <Text style={{ fontSize: 26, fontWeight: 'bold', color: '#2196F3', marginBottom: 18, letterSpacing: 1 }}>Create New Setlist</Text>
+                        <TextInput 
+                            style={[styles.input, { borderColor: '#b3c6e6', backgroundColor: '#e3f0fa', fontSize: 18, marginBottom: 14 }]} 
+                            placeholder="Setlist Name (Required)" 
+                            placeholderTextColor="#7bb6f7"
+                            value={setlistName} 
+                            onChangeText={setSetlistName} 
+                            autoFocus={true}
+                        />
+                        <TextInput
+                            style={[styles.input, styles.multilineSmall, { borderColor: '#b3c6e6', backgroundColor: '#e3f0fa', fontSize: 16 }]} 
+                            placeholder="Description (Optional)"
+                            placeholderTextColor="#7bb6f7"
+                            value={setlistDescription}
+                            onChangeText={setSetlistDescription}
+                            multiline
+                        />
+                        <TouchableOpacity
+                            style={{ backgroundColor: '#2196F3', borderRadius: 14, paddingVertical: 14, paddingHorizontal: 32, marginTop: 10, width: '100%', alignItems: 'center' }}
+                            onPress={addSetlist}
+                        >
+                            <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 17 }}>Save Setlist</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={{ backgroundColor: '#e3f0fa', borderRadius: 14, paddingVertical: 12, paddingHorizontal: 32, marginTop: 12, width: '100%', alignItems: 'center' }}
+                            onPress={() => setSetlistFormModalVisible(false)}
+                        >
+                            <Text style={{ color: '#2196F3', fontWeight: 'bold', fontSize: 16 }}>Cancel</Text>
+                        </TouchableOpacity>
+                    </View>
                 </View>
             </Modal>
 
@@ -581,25 +644,105 @@ export default function App() {
             >
                 {selectedSong && (
                     <View style={styles.modalView}>
-                        <Text style={styles.modalTitle}>{selectedSong.title}</Text>
+                        {/* Fixed Header: Program Part + Song Title + Font Size Controls */}
+                        <View style={styles.songModalHeader}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', width: '100%', justifyContent: 'space-between' }}>
+                                <View style={{ flex: 1, alignItems: 'center' }}>
+                                    {modalProgramParts && modalProgramParts.length > 0 && modalCurrentPartIndex !== null && modalCurrentPartIndex >= 0 ? (
+                                        <>
+                                            <Text style={styles.songModalPartName}>
+                                                {modalProgramParts[modalCurrentPartIndex]?.title || 'Program Part'}
+                                            </Text>
+                                            <Text style={styles.songModalSongTitle}>
+                                                {selectedSong.title}
+                                            </Text>
+                                        </>
+                                    ) : (
+                                        <Text style={styles.songModalSongTitle}>{selectedSong.title}</Text>
+                                    )}
+                                </View>
+                                {/* Font size controls */}
+                                <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>
+                                    <TouchableOpacity
+                                        style={{ padding: 6, borderRadius: 8, backgroundColor: '#e3f0fa', marginRight: 4 }}
+                                        onPress={() => setLyricsFontSize(f => Math.max(12, f - 2))}
+                                    >
+                                        <Text style={{ fontSize: 18, color: '#2196F3', fontWeight: 'bold' }}>-</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={{ padding: 6, borderRadius: 8, backgroundColor: '#e3f0fa' }}
+                                        onPress={() => setLyricsFontSize(f => Math.min(36, f + 2))}
+                                    >
+                                        <Text style={{ fontSize: 18, color: '#2196F3', fontWeight: 'bold' }}>+</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
+                        </View>
                         <Text style={styles.modalArtist}>by {selectedSong.artist}</Text>
                         <Text style={styles.modalKey}>Key: {selectedSong.key || 'N/A'}</Text>
                         <View style={styles.separator} />
-                        
-                        <ScrollView style={styles.modalLyricsScroll}>
-                            <Text style={styles.modalLyricsText}>
+                        {/* Scrollable Lyrics and Navigation Buttons at Bottom */}
+                        <ScrollView style={styles.modalLyricsScroll} contentContainerStyle={{flexGrow: 1, justifyContent: 'space-between'}}>
+                            <Text style={[styles.modalLyricsText, { fontSize: lyricsFontSize }]}>
                                 {selectedSong.lyrics || 'No lyrics available for this song.'}
                             </Text>
-                        </ScrollView>
+                            {/* Navigation Buttons Row (at bottom, scrolls with lyrics) */}
+                            <View style={styles.modalButtonRow}>
+                                {/* Previous Part Button (left) */}
+                                {modalProgramParts && modalProgramParts.length > 0 && modalCurrentPartIndex !== null && modalCurrentPartIndex > 0 ? (() => {
+                                    let prevIdx = null;
+                                    for (let i = modalCurrentPartIndex - 1; i >= 0; i--) {
+                                        const part = modalProgramParts[i];
+                                        if (part && part.song_id) { prevIdx = i; break; }
+                                    }
+                                    if (prevIdx !== null) {
+                                        const prevPart = modalProgramParts[prevIdx];
+                                        const prevSong = songs.find(s => s.song_id === prevPart.song_id);
+                                        return (
+                                            <TouchableOpacity
+                                                style={[styles.modalActionButton, { backgroundColor: '#2196F3' }]}
+                                                onPress={() => { setSelectedSong(prevSong); setModalCurrentPartIndex(prevIdx); }}
+                                            >
+                                                <Text style={styles.closeButtonText}>← Prev</Text>
+                                                <Text style={{ color: 'white', fontSize: 12 }} numberOfLines={1}>{prevPart.title} • {prevSong?.title || 'Song'}</Text>
+                                            </TouchableOpacity>
+                                        );
+                                    }
+                                    return null;
+                                })() : null}
 
-                        <View style={styles.modalButtonRow}>
-                            <TouchableOpacity
-                                style={[styles.closeButton, styles.closeModalButton]}
-                                onPress={() => setModalVisible(false)}
-                            >
-                                <Text style={styles.closeButtonText}>Close</Text>
-                            </TouchableOpacity>
-                        </View>
+                                {/* Center Close Button */}
+                                <TouchableOpacity
+                                    style={[styles.modalActionButton, styles.modalCloseAction]}
+                                    onPress={() => setModalVisible(false)}
+                                >
+                                    <Text style={styles.closeButtonText}>Close</Text>
+                                </TouchableOpacity>
+
+                                {/* Next Part Button (right) */}
+                                {modalProgramParts && modalProgramParts.length > 0 && modalCurrentPartIndex !== null && modalCurrentPartIndex < modalProgramParts.length - 1 ? (() => {
+                                    let nextIdx = null;
+                                    for (let i = modalCurrentPartIndex + 1; i < modalProgramParts.length; i++) {
+                                        const part = modalProgramParts[i];
+                                        if (part && part.song_id) { nextIdx = i; break; }
+                                    }
+                                    if (nextIdx !== null) {
+                                        const nextPart = modalProgramParts[nextIdx];
+                                        const nextSong = songs.find(s => s.song_id === nextPart.song_id);
+                                        return (
+                                            <TouchableOpacity
+                                                style={[styles.modalActionButton, { backgroundColor: '#4CAF50' }]}
+                                                onPress={() => { setSelectedSong(nextSong); setModalCurrentPartIndex(nextIdx); }}
+                                            >
+                                                <Text style={styles.closeButtonText}>Next →</Text>
+                                                <Text style={{ color: 'white', fontSize: 12 }} numberOfLines={1}>{nextPart.title} • {nextSong?.title || 'Song'}</Text>
+                                            </TouchableOpacity>
+                                        );
+                                    }
+                                    return null;
+                                })() : null}
+                            </View>
+                        </ScrollView>
                     </View>
                 )}
             </Modal>
@@ -609,10 +752,26 @@ export default function App() {
 
 // --- Stylesheet ---
 const styles = StyleSheet.create({
+    minimalBg: {
+        flex: 1,
+        backgroundColor: '#f7fbff',
+        position: 'relative',
+    },
+    bgShape1: {
+        position: 'absolute',
+        top: -80,
+        left: -100,
+        width: 350,
+        height: 350,
+        borderRadius: 175,
+        backgroundColor: '#e3f0fa',
+        opacity: 0.7,
+        zIndex: 0,
+    },
     container: { 
         flex: 1, 
-        backgroundColor: '#f5f5f5', 
-        paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0, 
+        backgroundColor: 'transparent',
+        paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
     },
     homeScreenWrapper: { 
         flex: 1, 
@@ -624,14 +783,14 @@ const styles = StyleSheet.create({
         paddingBottom: 120, 
     },
     heading: { 
-        fontSize: 36, 
-        fontWeight: 'bold', 
-        marginBottom: 10, 
-        marginTop: 30, 
-        textAlign: 'left', 
-        width: '90%', 
-        alignSelf: 'center', 
-        color: '#333', 
+        fontSize: 38,
+        fontWeight: 'bold',
+        marginBottom: 0,
+        marginTop: 0,
+        textAlign: 'center',
+        width: '100%',
+        color: 'white',
+        letterSpacing: 2,
     },
     formHeading: { 
         fontSize: 22, 
@@ -678,16 +837,18 @@ const styles = StyleSheet.create({
         fontSize: 18, 
     },
     separator: { 
-        height: 1, 
-        backgroundColor: '#ccc', 
-        width: '100%', 
-        marginVertical: 20, 
+        height: 2,
+        backgroundColor: '#00BFFF',
+        width: '90%',
+        alignSelf: 'center',
+        marginVertical: 20,
     }, 
     miniSeparator: { 
-        height: 1, 
-        backgroundColor: '#eee', 
-        width: '90%', 
-        marginVertical: 10, 
+        height: 1,
+        backgroundColor: '#FF9800',
+        width: '80%',
+        alignSelf: 'center',
+        marginVertical: 10,
     },
     listWrapper: { 
         width: '95%', 
@@ -796,25 +957,24 @@ const styles = StyleSheet.create({
         alignItems: 'flex-end',
     },
     fabOption: {
-        backgroundColor: '#fff',
         padding: 10,
         borderRadius: 20,
         marginBottom: 10,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.25,
+        shadowOpacity: 0.18,
         shadowRadius: 3.84,
         elevation: 5,
-        
     },
     fabText: {
-        color: '#333',
-        fontWeight: '600',
+        color: 'white',
+        fontWeight: '700',
         fontSize: 16,
         paddingHorizontal: 5,
+        letterSpacing: 1,
     },
     fabMain: {
-        backgroundColor: '#FF9800',
+        backgroundColor: '#00BFFF',
         width: 60,
         height: 60,
         borderRadius: 30,
@@ -877,5 +1037,123 @@ const styles = StyleSheet.create({
         height: 250, // Adjust as needed
         resizeMode: 'contain',
         marginVertical: 20,
-    }
+    },
+    // --- Song Modal Header Styles ---
+    songModalHeader: {
+        backgroundColor: '#e3eafc',
+        borderTopLeftRadius: 12,
+        borderTopRightRadius: 12,
+        paddingVertical: 18,
+        paddingHorizontal: 16,
+        alignItems: 'center',
+        marginHorizontal: -20,
+        marginTop: -50,
+        marginBottom: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: '#b3c6e6',
+        elevation: 2,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.08,
+        shadowRadius: 2,
+    },
+    songModalPartName: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#1a73e8',
+        marginBottom: 2,
+        letterSpacing: 0.5,
+    },
+    songModalSongTitle: {
+        fontSize: 26,
+        fontWeight: 'bold',
+        color: '#222',
+        textAlign: 'center',
+    },
+    modalActionButton: {
+        flex: 1,
+        paddingVertical: 12,
+        paddingHorizontal: 10,
+        borderRadius: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginHorizontal: 6,
+    },
+    modalCloseAction: {
+        backgroundColor: '#2196F3',
+        flex: 0.8,
+    },
+    heroHeaderMinimal: {
+        width: '100%',
+        alignItems: 'center',
+        paddingTop: 40,
+        paddingBottom: 10,
+        backgroundColor: 'transparent',
+        marginBottom: 10,
+        zIndex: 1,
+    },
+    headingMinimal: {
+        fontSize: 60,
+        fontWeight: '700',
+        color: '#2196F3',
+        letterSpacing: 1.5,
+        marginBottom: 2,
+    },
+    heroSubtextMinimal: {
+        color: '#7bb6f7',
+        fontSize: 15,
+        marginTop: 2,
+        fontWeight: '400',
+        letterSpacing: 0.5,
+    },
+    homeHintMinimal: {
+        color: '#2196F3',
+        fontWeight: '400',
+        marginLeft: '5%',
+        marginBottom: 15,
+        fontSize: 14,
+    },
+    setlistCardMinimal: {
+        backgroundColor: 'white',
+        borderRadius: 18,
+        marginVertical: 2, // Reduced gap
+        marginHorizontal: 2,
+        borderWidth: 1,
+        borderColor: '#e3f0fa',
+        padding: 0,
+        shadowColor: 'transparent',
+        elevation: 0,
+    },
+    fabOptionMinimal: {
+        backgroundColor: '#2196F3',
+        padding: 10,
+        borderRadius: 16,
+        marginBottom: 10,
+        alignItems: 'center',
+        minWidth: 120,
+    },
+    fabTextMinimal: {
+        color: 'white',
+        fontWeight: '600',
+        fontSize: 15,
+        letterSpacing: 0.5,
+    },
+    fabMainMinimal: {
+        backgroundColor: '#2196F3',
+        width: 56,
+        height: 56,
+        borderRadius: 28,
+        justifyContent: 'center',
+        alignItems: 'center',
+        shadowColor: '#2196F3',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.10,
+        shadowRadius: 4,
+        elevation: 4,
+    },
+    fabMainTextMinimal: {
+        color: 'white',
+        fontSize: 24,
+        fontWeight: 'bold',
+    },
 });

@@ -20,12 +20,22 @@ const getSong = (songId, songLibrary) => {
 const LinkSongModal = ({ visible, songLibrary, onClose, onSelectSong, currentPartId }) => {
     const [searchText, setSearchText] = useState('');
     
-    // Filter the song library based on search text (case-insensitive title/artist)
+    // Enhanced: Search all song fields (title, artist, key, lyrics, category, type, etc.)
+    const filterSong = (song, text) => {
+        if (!text) return true;
+        const lower = text.toLowerCase();
+        return (
+            (song.title && song.title.toLowerCase().includes(lower)) ||
+            (song.artist && song.artist.toLowerCase().includes(lower)) ||
+            (song.key && song.key.toLowerCase().includes(lower)) ||
+            (song.lyrics && song.lyrics.toLowerCase().includes(lower)) ||
+            (song.category && song.category.toLowerCase().includes(lower)) ||
+            (song.type && song.type.toLowerCase().includes(lower))
+        );
+    };
+
     const filteredSongs = songLibrary
-        .filter(song => 
-            song.title.toLowerCase().includes(searchText.toLowerCase()) ||
-            song.artist.toLowerCase().includes(searchText.toLowerCase())
-        )
+        .filter(song => filterSong(song, searchText))
         .sort((a, b) => a.title.localeCompare(b.title));
 
     const renderSongOption = ({ item }) => (
@@ -60,7 +70,7 @@ const LinkSongModal = ({ visible, songLibrary, onClose, onSelectSong, currentPar
                     <Feather name="search" size={20} color="#999" style={{ marginRight: 8 }} />
                     <TextInput
                         style={modalStyles.searchInput}
-                        placeholder="Search by Title or Artist..."
+                        placeholder="Search by title, artist, key, lyrics, etc..."
                         value={searchText}
                         onChangeText={setSearchText}
                         autoFocus={true}
@@ -383,7 +393,12 @@ export default function SetlistDetailScreen({
                     {linkedSong && (
                         <TouchableOpacity 
                             style={styles.actionButton} 
-                            onPress={() => handleViewSongDetails(linkedSong.song_id)}
+                            onPress={() => {
+                                // Determine the index of this part within the programParts array
+                                const partIndex = programParts.findIndex(p => p.part_id === item.part_id);
+                                // Pass the song id plus the parts list and index so App can enable modal navigation
+                                handleViewSongDetails(linkedSong.song_id, programParts, partIndex);
+                            }}
                         >
                             <Feather name="eye" size={20} color="#2196F3" />
                         </TouchableOpacity>
@@ -435,7 +450,7 @@ export default function SetlistDetailScreen({
             return (
                 <View style={[styles.memoContainer, styles.memoExists]}>
                     <MaterialIcons name="headset" size={20} color="#4CAF50" style={{marginRight: 10}} />
-                    <Text style={styles.memoText}>Memo Saved ({timeString})</Text>
+                    <Text style={styles.memoText}>Setlist Voice Memo</Text>
                     <View style={styles.memoActions}>
                         <TouchableOpacity
                             style={styles.memoPlayButton}
@@ -557,102 +572,137 @@ export default function SetlistDetailScreen({
 
 // --- Styles for SetlistDetailScreen (Main/Program Part Styles) ---
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#f5f5f5', padding: 10, },
-    scrollView: { flex: 1, },
-    header: { flexDirection: 'row', alignItems: 'center', marginTop: 10, marginBottom: 5, },
-    backButton: { marginRight: 10, padding: 5, },
-    heading: { flex: 1, fontSize: 26, fontWeight: 'bold', color: '#1a73e8', }, // Made title stand out more
-    
-    // DELETE BUTTON STYLES
+    container: { flex: 1, backgroundColor: 'transparent', padding: 10 },
+    scrollView: { flex: 1 },
+    header: { flexDirection: 'row', alignItems: 'center', marginTop: 10, marginBottom: 5 },
+    backButton: { marginRight: 10, padding: 5 },
+    heading: { flex: 1, fontSize: 26, fontWeight: 'bold', color: '#2196F3', letterSpacing: 1 },
     deleteHeaderButton: {
         marginLeft: 10,
         padding: 8,
         borderRadius: 8,
-        backgroundColor: '#FF6347',
+        backgroundColor: '#7bb6f7',
         justifyContent: 'center',
         alignItems: 'center',
     },
-    sectionHeader: { 
-        fontSize: 15, // Increased size
-        fontWeight: 'bold', 
-        color: '#00000073', 
-        marginTop: 15, // Increased margin
+    sectionHeader: {
+        fontSize: 15,
+        fontWeight: 'bold',
+        color: '#2196F3',
+        marginTop: 15,
         paddingHorizontal: 10,
-        textAlign: 'right', 
+        textAlign: 'right',
+        letterSpacing: 0.5,
     },
-    
-    description: { fontSize: 16, color: '#444', paddingHorizontal: 10, marginTop: 5, lineHeight: 22 }, // Better text style
-    date: { fontSize: 14, color: '#999', paddingHorizontal: 10, marginBottom: 15, },
-    scrollContent: { paddingBottom: 100, }, 
-    
-    list: { width: '100%', },
-    emptyList: { textAlign: 'center', marginTop: 20, fontSize: 16, color: '#999', paddingBottom: 20 },
-
-    // Program Part Item Styles
-    partItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#fff', padding: 15, marginVertical: 6, borderRadius: 10, borderLeftWidth: 5, borderLeftColor: '#1a73e8', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 3.84, elevation: 5, }, // Smoother shadow/elevation
-    partContent: { flex: 1, marginRight: 10, },
-    partTitle: { fontSize: 20, fontWeight: 'bold', color: '#1a73e8', marginBottom: 5, }, // Larger title
-    linkedSongContainer: { flexDirection: 'row', alignItems: 'center', marginTop: 5, },
-    songLinkedText: { flex: 1, fontSize: 15, color: '#4CAF50', fontWeight: '500', marginLeft: 8 }, // Adjusted margin
-    songUnlinkedText: { flex: 1, fontSize: 15, color: '#999', fontStyle: 'italic', marginLeft: 8 }, // Adjusted margin
+    description: { fontSize: 16, color: '#444', paddingHorizontal: 10, marginTop: 5, lineHeight: 22 },
+    date: { fontSize: 14, color: '#7bb6f7', paddingHorizontal: 10, marginBottom: 15 },
+    scrollContent: { paddingBottom: 100 },
+    list: { width: '100%' },
+    emptyList: { textAlign: 'center', marginTop: 20, fontSize: 16, color: '#b0b0b0', paddingBottom: 20 },
+    // Minimal program part card
+    partItem: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        backgroundColor: '#f7fbff',
+        padding: 16,
+        marginVertical: 6,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: '#e3f0fa',
+        shadowColor: 'transparent',
+        elevation: 0,
+    },
+    partContent: { flex: 1, marginRight: 10 },
+    partTitle: { fontSize: 18, fontWeight: '600', color: '#2196F3', marginBottom: 5, letterSpacing: 0.5 },
+    linkedSongContainer: { flexDirection: 'row', alignItems: 'center', marginTop: 5 },
+    songLinkedText: { flex: 1, fontSize: 15, color: '#2196F3', fontWeight: '500', marginLeft: 8 },
+    songUnlinkedText: { flex: 1, fontSize: 15, color: '#b0b0b0', fontStyle: 'italic', marginLeft: 8 },
     partActions: { flexDirection: 'row', alignItems: 'center' },
-    actionButton: { padding: 8, borderRadius: 8, marginLeft: 8, backgroundColor: '#f0f0f0', }, // Larger, rounder buttons
-
+    actionButton: { padding: 8, borderRadius: 8, marginLeft: 8, backgroundColor: '#e3f0fa' },
     // --- VOICE MEMO STYLES ---
-    memoContainer: { 
-        flexDirection: 'row', 
-        alignItems: 'center', 
-        justifyContent: 'space-between', 
-        paddingVertical: 12, 
+    memoContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 12,
         paddingHorizontal: 15,
-        borderRadius: 10, 
+        borderRadius: 12,
         marginHorizontal: 10,
         marginTop: 10,
         borderWidth: 1,
+        backgroundColor: '#f7fbff',
+        borderColor: '#e3f0fa',
     },
-    memoText: { 
-        fontSize: 16, 
+    memoText: {
+        fontSize: 16,
         flex: 1,
-        fontWeight: '500', 
-        color: '#333', 
+        fontWeight: '500',
+        color: '#2196F3',
     },
-
-    recordingActive: { 
-        backgroundColor: '#FFFBE0', 
-        borderColor: '#FF9800', 
+    recordingActive: {
+        backgroundColor: '#e3f0fa',
+        borderColor: '#2196F3',
     },
-    memoStopButton: { 
-        backgroundColor: '#E53935', 
-        padding: 8, 
-        borderRadius: 8, 
+    memoStopButton: {
+        backgroundColor: '#2196F3',
+        padding: 8,
+        borderRadius: 8,
     },
-
     memoExists: {
-        backgroundColor: '#E8F5E9', 
-        borderColor: '#4CAF50', 
+        backgroundColor: '#e3f0fa',
+        borderColor: '#2196F3',
     },
-    memoActions: { 
-        flexDirection: 'row', 
-        alignItems: 'center', 
+    memoActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
     },
-    memoPlayButton: { 
-        backgroundColor: '#4CAF50', 
-        padding: 8, 
-        borderRadius: 8, 
+    memoPlayButton: {
+        backgroundColor: '#2196F3',
+        padding: 8,
+        borderRadius: 8,
         marginRight: 10,
     },
-    memoDeleteButton: { 
-        backgroundColor: '#FFEBEE', 
-        padding: 8, 
-        borderRadius: 8, 
+    memoDeleteButton: {
+        backgroundColor: '#e3f0fa',
+        padding: 8,
+        borderRadius: 8,
         borderWidth: 1,
-        borderColor: '#E53935',
+        borderColor: '#b0b0b0',
     },
-
     memoEmpty: {
-        backgroundColor: '#F3E5F5', 
-        borderColor: '#868686ff', 
-        justifyContent: 'flex-start' 
+        backgroundColor: '#f7fbff',
+        borderColor: '#e3f0fa',
+        justifyContent: 'flex-start',
+    },
+    // --- Song Modal Header Styles (Minimal) ---
+    songModalHeader: {
+        backgroundColor: '#e3f0fa',
+        borderTopLeftRadius: 16,
+        borderTopRightRadius: 16,
+        paddingVertical: 16,
+        paddingHorizontal: 16,
+        alignItems: 'center',
+        marginHorizontal: -20,
+        marginTop: -50,
+        marginBottom: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: '#e3f0fa',
+        elevation: 0,
+        shadowColor: 'transparent',
+    },
+    songModalPartName: {
+        fontSize: 17,
+        fontWeight: '600',
+        color: '#2196F3',
+        marginBottom: 2,
+        letterSpacing: 0.5,
+    },
+    songModalSongTitle: {
+        fontSize: 22,
+        fontWeight: 'bold',
+        color: '#222',
+        textAlign: 'center',
     },
 });
 
