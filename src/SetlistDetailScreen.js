@@ -3,12 +3,8 @@ import {
     View, Text, StyleSheet, ScrollView, Pressable, TextInput, 
     Button, Alert, FlatList, Modal, TouchableOpacity 
 } from 'react-native';
-import { Audio } from 'expo-av'; 
-import * as FileSystem from 'expo-file-system/legacy';
 import { MaterialIcons, Ionicons, Feather } from '@expo/vector-icons'; 
 
-// Define default directory for recordings
-const RECORDING_DIR = FileSystem.documentDirectory + 'voiceMemos/';
 
 // Helper to get the full song object by ID
 const getSong = (songId, songLibrary) => {
@@ -160,13 +156,10 @@ export default function SetlistDetailScreen({
     deleteVoiceMemo, // <-- New prop to delete the memo metadata and file
     updateSongForPart,
     handleViewSongDetails,
+    updateSetlist, // <-- PROP TO UPDATE SETLIST DATA
     deleteSetlist, // <-- PROP USED BY HEADER DELETE BUTTON
+    setSongFormModalVisible, // <-- NEW PROP TO OPEN SONG FORM MODAL
 }) {
-    // --- New States for Voice Memo ---
-    const [recording, setRecording] = useState(null);
-    const [sound, setSound] = useState(null); // For playback
-    // ----------------------------------
-    
     // --- FAB States ---
     const [isFabMenuOpen, setIsFabMenuOpen] = useState(false);
     const [addPartModalVisible, setAddPartModalVisible] = useState(false);
@@ -177,8 +170,10 @@ export default function SetlistDetailScreen({
     const [linkModalVisible, setLinkModalVisible] = useState(false);
     const [partToLink, setPartToLink] = useState(null);
 
-    // Determines if a memo exists for this setlist (single memo constraint)
-    const existingMemo = voiceMemos.length > 0 ? voiceMemos[0] : null;
+    // --- Edit Setlist Modal State ---
+    const [editModalVisible, setEditModalVisible] = useState(false);
+    const [editName, setEditName] = useState(currentSetlist?.name || '');
+    const [editDescription, setEditDescription] = useState(currentSetlist?.description || '');
 
     // --- Setlist Delete Handler (MODIFIED) ---
     const confirmAndDelete = () => {
@@ -196,141 +191,32 @@ export default function SetlistDetailScreen({
     };
     // ----------------------------
 
-    // --- Audio Handlers (START) ---
-    
-    // Ensure the recordings directory exists
-    const prepareRecordingDir = async () => {
-        const dirInfo = await FileSystem.getInfoAsync(RECORDING_DIR);
-        if (!dirInfo.exists) {
-            await FileSystem.makeDirectoryAsync(RECORDING_DIR, { intermediates: true });
-        }
-    };
+    // Sync edit fields when currentSetlist changes
+    useEffect(() => {
+        setEditName(currentSetlist?.name || '');
+        setEditDescription(currentSetlist?.description || '');
+    }, [currentSetlist]);
 
-    // Starts recording
-    const startRecording = async () => {
-        setIsFabMenuOpen(false); // Close menu on action
-        
-        // Prevent recording if a memo already exists
-        if (existingMemo) {
-             Alert.alert('Existing Memo', 'Please delete the current memo before recording a new one.', [
-                 { text: 'OK' },
-                 { text: 'Delete Existing', onPress: () => handleDeleteMemo(existingMemo.memo_id) },
-             ]);
-             return;
-        }
-        
-        // Unload any existing sound object before recording
-        if (sound) {
-            await sound.unloadAsync();
-            setSound(null);
-        }
-        
-        try {
-            await prepareRecordingDir();
-            await Audio.requestPermissionsAsync();
-            await Audio.setAudioModeAsync({
-                allowsRecording: true,
-                playsInSilentModeIOS: true,
-                shouldDuckAndroid: true,
-                playThroughEarpieceAndroid: false,
-            });
-            const { recording: newRecording } = await Audio.Recording.createAsync(
-                Audio.RecordingOptionsPresets.HIGH_QUALITY
-            );
-            setRecording(newRecording);
-        } catch (err) {
-            console.error('Failed to start recording', err);
-            Alert.alert('Error', 'Failed to start recording.');
-        }
-    };
-
-    // Stops recording and saves the file/metadata
-    const stopRecording = async () => {
-        if (!recording) return;
-
-        setRecording(undefined);
-        await recording.stopAndUnloadAsync();
-        // Reset audio mode
-        await Audio.setAudioModeAsync({ allowsRecording: false });
-        
-        const uri = recording.getURI();
-        if (!uri) return;
-
-        const fileName = `memo_${Date.now()}.m4a`;
-        const newFilePath = RECORDING_DIR + fileName;
-
-        try {
-            // 1. Move the temporary recording file to the permanent location
-            await FileSystem.moveAsync({
-                from: uri,
-                to: newFilePath,
-            });
-
-            // 2. Save the memo metadata (file path) to the setlist state
-            const result = await addVoiceMemo(currentSetlist.setlist_id, newFilePath);
-            if (!result) {
-                // Cleanup file if saving metadata fails
-                await FileSystem.deleteAsync(newFilePath, { idempotent: true });
-                Alert.alert('Save Error', 'Failed to save recording metadata.');
-            } 
-        } catch (moveError) {
-            console.error('Error saving or moving recording:', moveError);
-            Alert.alert('Save Error', 'Failed to save recording file.');
-        }
-    };
-
-    // Toggles play/pause for the existing memo
-    const togglePlayback = async () => {
-        if (!existingMemo) return;
-        const uri = existingMemo.file_path;
-
-        if (sound) {
-            const status = await sound.getStatusAsync();
-            if (status.isPlaying) {
-                await sound.pauseAsync();
-            } else {
-                await sound.playAsync();
-            }
+    const handleSaveEdit = async () => {
+        const nameTrim = (editName || '').trim();
+        if (!nameTrim) {
+            Alert.alert('Validation', 'Setlist name cannot be empty.');
             return;
         }
-
-        // If no sound object exists, create one and play
-        try {
-            const { sound: newSound } = await Audio.Sound.createAsync(
-                { uri: uri },
-                { shouldPlay: true },
-                // Set playback status listener
-                (status) => {
-                    if (status.didJustFinish) {
-                        newSound.unloadAsync();
-                        setSound(null);
-                    }
-                }
-            );
-            setSound(newSound);
-            await newSound.playAsync();
-        } catch (error) {
-            console.error('Error playing sound:', error);
-            Alert.alert('Playback Error', 'Failed to play voice memo.');
+        if (typeof updateSetlist === 'function') {
+            try {
+                await updateSetlist(currentSetlist.setlist_id, nameTrim, editDescription || '');
+                setEditModalVisible(false);
+                Alert.alert('Success', 'Setlist updated.');
+            } catch (err) {
+                console.error('Update setlist failed', err);
+                Alert.alert('Error', 'Failed to update setlist.');
+            }
+        } else {
+            Alert.alert('Error', 'Update function not available.');
         }
     };
-    
-    // Deletes the memo file and metadata
-    const handleDeleteMemo = (memoId) => {
-        Alert.alert('Confirm Delete', 'Are you sure you want to delete this voice memo and its file?', [
-            { text: 'Cancel', style: 'cancel' }, 
-            { text: 'Delete', onPress: async () => {
-                // Ensure playback is stopped before deleting the file
-                if (sound) {
-                    await sound.unloadAsync(); 
-                    setSound(null);
-                }
-                await deleteVoiceMemo(memoId);
-            }, style: 'destructive'}
-        ]);
-    }
-    
-    // --- Audio Handlers (END) ---
+
 
     // --- Program Part Handlers ---
     
@@ -358,10 +244,12 @@ export default function SetlistDetailScreen({
         setIsFabMenuOpen(false);
         setAddPartModalVisible(true);
     }
-    
-    const handleRecordMemoFab = () => {
-        startRecording(); // This automatically closes the FAB menu inside startRecording
+
+    const handleAddNewSongFab = () => {
+        setIsFabMenuOpen(false);
+        setSongFormModalVisible(true);
     }
+
 
     // --- Renderer Functions ---
 
@@ -369,10 +257,18 @@ export default function SetlistDetailScreen({
         const linkedSong = getSong(item.song_id, songLibrary);
         
         return (
-            <View style={styles.partItem}>
+            <TouchableOpacity
+                style={styles.partItem}
+                activeOpacity={0.8}
+                onPress={() => {
+                    if (linkedSong) {
+                        const partIndex = programParts.findIndex(p => p.part_id === item.part_id);
+                        handleViewSongDetails(linkedSong.song_id, programParts, partIndex);
+                    }
+                }}
+            >
                 <View style={styles.partContent}>
                     <Text style={styles.partTitle}>{item.title}</Text>
-                    
                     {linkedSong ? (
                         <View style={styles.linkedSongContainer}>
                             <Feather name="music" size={14} color="#4CAF50" />
@@ -388,94 +284,26 @@ export default function SetlistDetailScreen({
                         </View>
                     )}
                 </View>
-
                 <View style={styles.partActions}>
-                    {linkedSong && (
-                        <TouchableOpacity 
-                            style={styles.actionButton} 
-                            onPress={() => {
-                                // Determine the index of this part within the programParts array
-                                const partIndex = programParts.findIndex(p => p.part_id === item.part_id);
-                                // Pass the song id plus the parts list and index so App can enable modal navigation
-                                handleViewSongDetails(linkedSong.song_id, programParts, partIndex);
-                            }}
-                        >
-                            <Feather name="eye" size={20} color="#2196F3" />
-                        </TouchableOpacity>
-                    )}
                     <TouchableOpacity 
                         style={[styles.actionButton, { backgroundColor: '#FFFBE0' }]} 
-                        onPress={() => handleOpenLinkModal(item.part_id)}
+                        onPress={(e) => { e.stopPropagation && e.stopPropagation(); handleOpenLinkModal(item.part_id); }}
                     >
                         <Feather name="link" size={20} color="#FFC107" />
                     </TouchableOpacity>
                     <TouchableOpacity 
                         style={[styles.actionButton, { marginLeft: 8, backgroundColor: '#FFEBEE' }]} 
-                        onPress={() => Alert.alert('Confirm Delete', `Delete part: ${item.title}?`, [{text: 'Cancel'}, {text: 'Delete', onPress: () => handleDeletePart(item.part_id), style: 'destructive'}])}
+                        onPress={(e) => { e.stopPropagation && e.stopPropagation(); Alert.alert('Confirm Delete', `Delete part: ${item.title}?`, [{text: 'Cancel'}, {text: 'Delete', onPress: () => handleDeletePart(item.part_id), style: 'destructive'}]); }}
                     >
                         <Feather name="trash-2" size={20} color="#FF6347" />
                     </TouchableOpacity>
                 </View>
-            </View>
+            </TouchableOpacity>
         );
     };
 
     // --- Voice Memo Section Renderer ---
-    const renderVoiceMemoSection = () => {
-        // Check if the current sound object is playing the existing memo
-        const isPlaying = sound && sound._loaded && existingMemo && sound._uri === existingMemo.file_path;
-        
-        // State 1: Currently Recording
-        if (recording) {
-            return (
-                <View style={[styles.memoContainer, styles.recordingActive]}>
-                    <MaterialIcons name="mic" size={20} color="#E53935" style={{marginRight: 10}} />
-                    <Text style={styles.memoText}>**Recording...**</Text>
-                    <TouchableOpacity
-                        style={styles.memoStopButton}
-                        onPress={stopRecording} // STOP function
-                    >
-                        <Feather name="square" size={20} color="white" />
-                    </TouchableOpacity>
-                </View>
-            );
-        }
-
-        // State 2: Memo Exists (Show Play/Delete)
-        if (existingMemo) {
-            const date = new Date(existingMemo.date_recorded);
-            // Format time for display
-            const timeString = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-            return (
-                <View style={[styles.memoContainer, styles.memoExists]}>
-                    <MaterialIcons name="headset" size={20} color="#4CAF50" style={{marginRight: 10}} />
-                    <Text style={styles.memoText}>Setlist Voice Memo</Text>
-                    <View style={styles.memoActions}>
-                        <TouchableOpacity
-                            style={styles.memoPlayButton}
-                            onPress={togglePlayback} // Play/Pause function
-                        >
-                            <MaterialIcons name={isPlaying ? "pause" : "play-arrow"} size={24} color="white" />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={styles.memoDeleteButton}
-                            onPress={() => handleDeleteMemo(existingMemo.memo_id)}
-                        >
-                            <Feather name="trash-2" size={18} color="#E53935" />
-                        </TouchableOpacity>
-                    </View>
-                </View>
-            );
-        }
-        
-        return (
-            <View style={[styles.memoContainer, styles.memoEmpty]}>
-                <Feather name="mic-off" size={18} color="#999" style={{ marginRight: 10 }}/>
-                <Text style={styles.memoText}>No Voice Memo Saved</Text>
-            </View>
-        );
-    };
+    // voice memo UI moved to per-part controls
 
     return (
         <View style={styles.container}>
@@ -483,10 +311,12 @@ export default function SetlistDetailScreen({
                 <Pressable onPress={handleHomePress} style={styles.backButton}>
                     <Ionicons name="arrow-back" size={28} color="#1a73e8" />
                 </Pressable>
-                
-                <Text style={styles.heading} numberOfLines={1}>{currentSetlist.name}</Text>
-                
-                {/* --- DELETE BUTTON (Now correctly wired to confirmAndDelete) --- */}
+                <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', flexDirection: 'row' }}>
+                    <Text style={[styles.heading, { textAlign: 'center', flex: 1 }]} numberOfLines={1}>{currentSetlist.name}</Text>
+                </View>
+                <Pressable onPress={() => setEditModalVisible(true)} style={[styles.editHeaderButton]}>
+                    <Feather name="edit-2" size={18} color="white" />
+                </Pressable>
                 <Pressable onPress={confirmAndDelete} style={styles.deleteHeaderButton}>
                     <Feather name="trash-2" size={20} color="white" />
                 </Pressable>
@@ -499,9 +329,7 @@ export default function SetlistDetailScreen({
                 </Text>
                 <Text style={styles.date}>Created: {currentSetlist.date_created}</Text>
                 
-                {/* --- 1. VOICE MEMO SECTION (Dynamic UI) --- */}
-                <Text style={styles.sectionHeader}>Setlist Memo</Text>
-                {renderVoiceMemoSection()}
+                {/* Voice memos moved to each Program Part (controls appear on each part) */}
 
                 {/* --- 2. Program Parts List --- */}
                 <Text style={[styles.sectionHeader, {marginTop: 20}]}>Program Parts</Text>
@@ -520,18 +348,13 @@ export default function SetlistDetailScreen({
             <View style={fabStyles.fabContainer}>
                 {isFabMenuOpen && (
                     <View>
-                        {/* Option 1: Record New Memo (Only visible if no memo exists) */}
-                        {!existingMemo && !recording && (
-                            <TouchableOpacity 
-                                style={[fabStyles.fabAction, { backgroundColor: '#FF9800' }]} 
-                                onPress={handleRecordMemoFab}
-                            >
-                                <Text style={fabStyles.fabActionText}>Record Memo</Text>
-                                <Feather name="mic" size={20} color="white" />
-                            </TouchableOpacity>
-                        )}
-
-                        {/* Option 2: Add Program Part */}
+                        {/* Option: Add New Song */}
+                        <TouchableOpacity style={fabStyles.fabAction} onPress={handleAddNewSongFab}>
+                            <Text style={fabStyles.fabActionText}>Add New Song</Text>
+                            <Feather name="music" size={20} color="white" />
+                        </TouchableOpacity>
+                        
+                        {/* Option: Add Program Part */}
                         <TouchableOpacity style={fabStyles.fabAction} onPress={handleAddPartFab}>
                             <Text style={fabStyles.fabActionText}>Add Part</Text>
                             <Feather name="plus-square" size={20} color="white" />
@@ -553,6 +376,37 @@ export default function SetlistDetailScreen({
             </View>
             
             {/* --- Modals --- */}
+            {/* --- Edit Setlist Modal --- */}
+            <Modal
+                animationType="slide"
+                transparent={true}
+                visible={editModalVisible}
+                onRequestClose={() => setEditModalVisible(false)}
+            >
+                <Pressable style={fabStyles.modalOverlay} onPress={() => setEditModalVisible(false)}>
+                    <Pressable style={[fabStyles.partModalView, {width: '92%'}]} onPress={e => e.stopPropagation()}>
+                        <Text style={[fabStyles.partModalTitle, {marginBottom: 8}]}>Edit Setlist</Text>
+                        <TextInput
+                            style={fabStyles.partModalInput}
+                            placeholder="Setlist Name"
+                            value={editName}
+                            onChangeText={setEditName}
+                            autoFocus={true}
+                        />
+                        <TextInput
+                            style={[fabStyles.partModalInput, {height: 90, textAlignVertical: 'top'}]}
+                            placeholder="Description (optional)"
+                            value={editDescription}
+                            onChangeText={setEditDescription}
+                            multiline
+                        />
+                        <View style={{flexDirection: 'row', justifyContent: 'space-between', marginTop: 8}}>
+                            <Button title="Cancel" onPress={() => setEditModalVisible(false)} color="#777" />
+                            <Button title="Save" onPress={handleSaveEdit} color="#1a73e8" />
+                        </View>
+                    </Pressable>
+                </Pressable>
+            </Modal>
             <LinkSongModal
                 visible={linkModalVisible}
                 songLibrary={songLibrary}
@@ -582,6 +436,14 @@ const styles = StyleSheet.create({
         padding: 8,
         borderRadius: 8,
         backgroundColor: '#7bb6f7',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    editHeaderButton: {
+        marginLeft: 10,
+        padding: 8,
+        borderRadius: 8,
+        backgroundColor: '#4CAF50',
         justifyContent: 'center',
         alignItems: 'center',
     },

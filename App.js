@@ -1,17 +1,52 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
     View, TextInput, Button, Text, StyleSheet, Alert, 
     ScrollView, FlatList, Pressable, Modal, TouchableOpacity, 
     Platform, StatusBar, Image, BackHandler 
 } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
+import { Audio } from 'expo-av';
 import { initDB } from './src/database'; 
+import { Feather } from '@expo/vector-icons';
 import SetlistDetailScreen from './src/SetlistDetailScreen'; 
 import Metronome from './Metronome';
+import { logActivityToFile, LOG_FILE, readActivityLogFile } from './src/activityLogger';
+import * as Sharing from 'expo-sharing';
+import { chordDataUrls } from './src/chordGenerator';
 
 // --- Component: AllSongsScreen ---
-const AllSongsScreen = ({ songs, onSongPress, onClose }) => {
+const AllSongsScreen = ({ songs, onSongPress, onClose, onDeleteSong, onUpdateSong }) => {
     const [search, setSearch] = useState("");
+    const [editModalVisible, setEditModalVisible] = useState(false);
+    const [viewSongModalVisible, setViewSongModalVisible] = useState(false);
+    const [selectedViewSong, setSelectedViewSong] = useState(null);
+    const [lyricsFontSize, setLyricsFontSize] = useState(16);
+    const [editLyricsHeight, setEditLyricsHeight] = useState(100);
+    const [editingSong, setEditingSong] = useState(null);
+    const [editTitle, setEditTitle] = useState('');
+    const [editArtist, setEditArtist] = useState('');
+    const [editKeyField, setEditKeyField] = useState('');
+    const [editLyrics, setEditLyrics] = useState('');
+    const [editCategory, setEditCategory] = useState('');
+    const [editType, setEditType] = useState('');
+    
+    // Android back button handling
+    useEffect(() => {
+        const onBackPress = () => {
+            if (viewSongModalVisible) {
+                setViewSongModalVisible(false);
+                return true;
+            }
+            if (editModalVisible) {
+                setEditModalVisible(false);
+                return true;
+            }
+            if (onClose) onClose();
+            return true;
+        };
+        const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+        return () => subscription.remove();
+    }, [viewSongModalVisible, editModalVisible, onClose]);
     // Comprehensive search across all fields
     const filteredSongs = songs.filter(song => {
         const q = search.toLowerCase();
@@ -25,16 +60,82 @@ const AllSongsScreen = ({ songs, onSongPress, onClose }) => {
         );
     });
 
-    const renderSongItem = ({ item }) => (
-        <Pressable 
-            style={styles.setlistItemCard} 
-            onPress={() => onSongPress(item)}
-        >
-            <Text style={styles.cardTitle}>{item.title}</Text>
-            <Text style={styles.cardDetail}>{item.artist}</Text>
-            <Text style={styles.cardDetail}>Key: {item.key || 'N/A'}</Text>
-        </Pressable>
-    );
+    // Helper function to find which field matched and create highlighted text
+    const getMatchedField = (item) => {
+        const q = search.toLowerCase();
+        if (!q) return null;
+        
+        if (item.title?.toLowerCase().includes(q)) {
+            return { field: 'Title', value: item.title };
+        }
+        if (item.artist?.toLowerCase().includes(q)) {
+            return { field: 'Artist', value: item.artist };
+        }
+        if (item.key?.toLowerCase().includes(q)) {
+            return { field: 'Key', value: item.key };
+        }
+        if (item.category?.toLowerCase().includes(q)) {
+            return { field: 'Category', value: item.category };
+        }
+        if (item.type?.toLowerCase().includes(q)) {
+            return { field: 'Type', value: item.type };
+        }
+        if (item.lyrics?.toLowerCase().includes(q)) {
+            // Show snippet of lyrics with match
+            const start = Math.max(0, item.lyrics.toLowerCase().indexOf(q) - 20);
+            const end = Math.min(item.lyrics.length, start + 60);
+            let snippet = item.lyrics.substring(start, end);
+            if (start > 0) snippet = '...' + snippet;
+            if (end < item.lyrics.length) snippet = snippet + '...';
+            return { field: 'Lyrics', value: snippet };
+        }
+        return null;
+    };
+
+    const renderSongItem = ({ item }) => {
+        const matchedField = getMatchedField(item);
+        
+        return (
+            <View style={[styles.setlistItemCard, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}>
+                <Pressable style={{ flex: 1 }} onPress={() => {
+                    setSelectedViewSong(item);
+                    setViewSongModalVisible(true);
+                }}>
+                    <Text style={styles.cardTitle}>{item.title}</Text>
+                    <Text style={styles.cardDetail}>{item.artist}</Text>
+                    <Text style={styles.cardDetail}>Key: {item.key || 'N/A'}</Text>
+                    {matchedField && search && (
+                        <Text style={{ fontSize: 12, color: '#2196F3', fontWeight: '600', marginTop: 4, backgroundColor: '#e3f0fa', paddingVertical: 4, paddingHorizontal: 6, borderRadius: 4 }}>
+                            📍 {matchedField.field}: "{matchedField.value}"
+                        </Text>
+                    )}
+                </Pressable>
+            <View style={styles.songItemActions}>
+                <TouchableOpacity
+                    style={styles.songActionButton}
+                    onPress={() => {
+                        setEditingSong(item);
+                        setEditTitle(item.title || '');
+                        setEditArtist(item.artist || '');
+                        setEditKeyField(item.key || '');
+                        setEditLyrics(item.lyrics || '');
+                        setEditCategory(item.category || '');
+                        setEditType(item.type || '');
+                        setEditModalVisible(true);
+                    }}
+                >
+                    <Feather name="edit-2" size={18} color="#2196F3" />
+                </TouchableOpacity>
+                <TouchableOpacity
+                    style={[styles.songActionButton, { marginLeft: 8 }]}
+                    onPress={() => onDeleteSong && onDeleteSong(item.song_id)}
+                >
+                    <Feather name="trash-2" size={18} color="#E53935" />
+                </TouchableOpacity>
+            </View>
+        </View>
+        );
+    };
 
     return (
         <View style={styles.allSongsContainer}>
@@ -57,6 +158,106 @@ const AllSongsScreen = ({ songs, onSongPress, onClose }) => {
                 contentContainerStyle={styles.listContent}
                 ListEmptyComponent={<Text style={styles.emptyList}>No songs found. Try a different search!</Text>}
             />
+            {/* Edit Song Modal */}
+            <Modal
+                animationType="slide"
+                transparent={true}
+                visible={editModalVisible}
+                onRequestClose={() => setEditModalVisible(false)}
+            >
+                <Pressable style={fabStyles.modalOverlay} onPress={() => setEditModalVisible(false)}>
+                    <Pressable style={[fabStyles.partModalView, { width: '94%', marginBottom: 32 }]} onPress={e => e.stopPropagation()}>
+                        <Text style={fabStyles.partModalTitle}>Edit Song</Text>
+                        <TextInput style={fabStyles.partModalInput} placeholder="Title" value={editTitle} onChangeText={setEditTitle} />
+                        <TextInput style={fabStyles.partModalInput} placeholder="Artist" value={editArtist} onChangeText={setEditArtist} />
+                        <TextInput style={fabStyles.partModalInput} placeholder="Key" value={editKeyField} onChangeText={setEditKeyField} />
+                        <TextInput style={[fabStyles.partModalInput, { height: Math.max(100, editLyricsHeight), textAlignVertical: 'top' }]} placeholder="Lyrics" value={editLyrics} onChangeText={setEditLyrics} onContentSizeChange={(e) => {
+                            const h = e.nativeEvent.contentSize.height;
+                            setEditLyricsHeight(Math.min(300, Math.max(100, h)));
+                        }} multiline />
+                        <TextInput style={fabStyles.partModalInput} placeholder="Category" value={editCategory} onChangeText={setEditCategory} />
+                        <TextInput style={fabStyles.partModalInput} placeholder="Type" value={editType} onChangeText={setEditType} />
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8, marginBottom: 24 }}>
+                            <Button title="Cancel" onPress={() => setEditModalVisible(false)} color="#777" />
+                            <Button
+                                title="Save"
+                                onPress={async () => {
+                                    if (!editingSong) return;
+                                    if (!editTitle.trim()) { Alert.alert('Validation', 'Please enter a title.'); return; }
+                                    if (onUpdateSong) {
+                                        await onUpdateSong(editingSong.song_id, {
+                                            title: editTitle.trim(),
+                                            artist: editArtist.trim(),
+                                            key: editKeyField.trim(),
+                                            lyrics: editLyrics,
+                                            category: editCategory.trim(),
+                                            type: editType.trim(),
+                                        });
+                                        Alert.alert('Success', 'Song has been updated successfully!');
+                                    }
+                                    setEditModalVisible(false);
+                                }}
+                                color="#1a73e8"
+                            />
+                        </View>
+                    </Pressable>
+                </Pressable>
+            </Modal>
+            {/* View Song Modal */}
+            <Modal
+                animationType="slide"
+                transparent={false}
+                visible={viewSongModalVisible}
+                onRequestClose={() => setViewSongModalVisible(false)}
+            >
+                {selectedViewSong && (
+                    <View style={[styles.modalView, { paddingBottom: 32 }]}>
+                        <View style={styles.songModalHeader}>
+                            <Text style={[styles.songModalSongTitle, { fontSize: 30, fontWeight: 'bold', color: '#222', marginBottom: 2, textAlign: 'center' }]}>
+                                {selectedViewSong.title}
+                            </Text>
+                        </View>
+                        <Text style={styles.modalArtist}>by {selectedViewSong.artist}</Text>
+                        <Text style={styles.modalKey}>Key: {selectedViewSong.key || 'N/A'}</Text>
+                        {selectedViewSong.category && <Text style={styles.modalKey}>Category: {selectedViewSong.category}</Text>}
+                        {selectedViewSong.type && <Text style={styles.modalKey}>Type: {selectedViewSong.type}</Text>}
+                        <View style={styles.separator} />
+                        
+                        {/* Font size controls */}
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 13, color: '#2196F3', fontWeight: '600', marginRight: 10 }}>Font Size</Text>
+                            <TouchableOpacity
+                                style={{ padding: 6, borderRadius: 6, backgroundColor: '#e3f0fa', marginRight: 4 }}
+                                onPress={() => setLyricsFontSize(f => Math.max(12, f - 2))}
+                            >
+                                <Text style={{ fontSize: 16, color: '#2196F3', fontWeight: 'bold' }}>−</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={{ padding: 6, borderRadius: 6, backgroundColor: '#e3f0fa' }}
+                                onPress={() => setLyricsFontSize(f => Math.min(36, f + 2))}
+                            >
+                                <Text style={{ fontSize: 16, color: '#2196F3', fontWeight: 'bold' }}>+</Text>
+                            </TouchableOpacity>
+                        </View>
+
+                        {/* Scrollable Lyrics */}
+                        <ScrollView style={styles.modalLyricsScroll} contentContainerStyle={{flexGrow: 1, justifyContent: 'space-between'}}>
+                            <Text style={[styles.modalLyricsText, { fontSize: lyricsFontSize, lineHeight: Math.round(lyricsFontSize * 1.35) }]}>
+                                {selectedViewSong.lyrics || 'No lyrics available for this song.'}
+                            </Text>
+                            {/* Close Button */}
+                            <View style={styles.modalButtonRow}>
+                                <TouchableOpacity
+                                    style={[styles.modalActionButton, styles.modalCloseAction]}
+                                    onPress={() => setViewSongModalVisible(false)}
+                                >
+                                    <Text style={styles.closeButtonText}>Close</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </ScrollView>
+                    </View>
+                )}
+            </Modal>
             <TouchableOpacity
                 style={[styles.closeButton, styles.closeModalButton, {maxHeight: 50, marginTop: 20, marginBottom: 20 }]}
                 onPress={onClose}
@@ -69,24 +270,267 @@ const AllSongsScreen = ({ songs, onSongPress, onClose }) => {
 
 // --- Component: AddPictureScreen (Practice Resources) ---
 const AddPictureScreen = ({ onClose }) => {
+    const [playingChord, setPlayingChord] = useState(null);
+
+    const chordFrequencies = {
+        'A': [440, 554.37, 659.25], // A, C#, E
+        'B': [493.88, 622.25, 739.99], // B, D#, F#
+        'C': [261.63, 329.63, 392.00], // C, E, G
+        'D': [293.66, 369.99, 440.00], // D, F#, A
+        'E': [329.63, 415.30, 493.88], // E, G#, B
+        'F': [349.23, 440.00, 523.25], // F, A, C
+        'G': [392.00, 493.88, 587.33], // G, B, D
+    };
+
+    const playChord = async (note) => {
+        try {
+            setPlayingChord(note);
+            
+            // Get the base64 WAV data for the chord
+            const audioUri = chordDataUrls[note];
+            
+            // Play using expo-av
+            const { sound } = await Audio.Sound.createAsync({
+                uri: audioUri,
+            });
+            await sound.playAsync();
+            
+            // Stop playing after sound finishes
+            setTimeout(() => {
+                setPlayingChord(null);
+                sound.unloadAsync();
+            }, 1200);
+        } catch (error) {
+            console.warn(`Could not play chord ${note}:`, error);
+            setPlayingChord(null);
+        }
+    };
+
+    // Android back button handling
+    useEffect(() => {
+        const onBackPress = () => {
+            if (onClose) onClose();
+            return true;
+        };
+        const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+        return () => subscription.remove();
+    }, [onClose]);
+    
     return (
         <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f7fbff', padding: 24 }} style={{ backgroundColor: '#f7fbff' }}>
             <Text style={{ fontSize: 28, fontWeight: 'bold', color: '#2196F3', marginBottom: 6, letterSpacing: 1, marginTop: 20 }}>Practice Resources</Text>
             <Text style={{ color: '#7bb6f7', fontSize: 15, marginBottom: 18, textAlign: 'center', maxWidth: 320 }}>
                 Tools to help your worship team prepare and flow smoothly.
             </Text>
+            
+            {/* Metronome Section */}
             <View style={{ width: '100%', alignItems: 'center', backgroundColor: '#e3f0fa', borderRadius: 18, padding: 18, marginBottom: 24 }}>
                 <Text style={{ fontSize: 18, fontWeight: '600', color: '#2196F3', marginBottom: 10 }}>Metronome</Text>
                 <Metronome />
             </View>
-            <View style={{ width: '100%', backgroundColor: '#e3f0fa', borderRadius: 18, padding: 0, marginBottom: 24, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                <ScrollView horizontal={false} contentContainerStyle={{ alignItems: 'center', justifyContent: 'center' }} style={{ width: '100%' }}>
-                    <Image
-                        source={require('./assets/myImage.jpg')}
-                        style={{ width: '100%', height: undefined, aspectRatio: 3/4, maxHeight: 500, resizeMode: 'contain', borderRadius: 12, backgroundColor: '#f7fbff' }}
-                    />
-                </ScrollView>
+
+            {/* Chord Keys Section */}
+            <View style={{ width: '100%', backgroundColor: '#e3f0fa', borderRadius: 18, padding: 18, marginBottom: 24, alignItems: 'center' }}>
+                <Text style={{ fontSize: 18, fontWeight: '600', color: '#2196F3', marginBottom: 16 }}>🎵 Chord Keys</Text>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8 }}>
+                    {['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'].map((note) => (
+                        <TouchableOpacity
+                            key={note}
+                            style={{
+                                backgroundColor: playingChord === note ? '#FF9800' : '#2196F3',
+                                borderRadius: 10,
+                                paddingVertical: 14,
+                                paddingHorizontal: 16,
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                minWidth: 48,
+                                shadowColor: '#2196F3',
+                                shadowOpacity: 0.3,
+                                shadowRadius: 4,
+                                elevation: 4,
+                            }}
+                            onPress={() => playChord(note)}
+                            disabled={playingChord !== null}
+                        >
+                            <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>{note}</Text>
+                        </TouchableOpacity>
+                    ))}
+                </View>
+                <Text style={{ fontSize: 12, color: '#7bb6f7', marginTop: 12, textAlign: 'center', fontStyle: 'italic' }}>
+                    Tap any button to play the chord sound
+                </Text>
             </View>
+
+            {/* Chord Reference Guide Section - Full Screen Scrollable */}
+            <ScrollView style={{ width: '100%', backgroundColor: '#e3f0fa', borderTopLeftRadius: 18, borderTopRightRadius: 18, paddingHorizontal: 16, paddingTop: 16, paddingBottom: 24, marginBottom: 24 }}>
+                <Text style={{ fontSize: 18, fontWeight: '600', color: '#2196F3', marginBottom: 14, textAlign: 'center' }}>📚 Complete Chord Reference Guide</Text>
+                    {/* Major Keys Section */}
+                    <View style={{ marginBottom: 20 }}>
+                        <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#1976D2', marginBottom: 10, paddingLeft: 8 }}>🎼 MAJOR KEYS & CHORDS (All 12 Keys)</Text>
+                        
+                        {/* C Major */}
+                        <View style={{ backgroundColor: '#fff', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>C Major</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>I: C  ii: Dm  iii: Em  IV: F  V: G  vi: Am  vii°: Bdim</Text>
+                        </View>
+
+                        {/* C# Major */}
+                        <View style={{ backgroundColor: '#fff', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>C# Major</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>I: C#  ii: D#m  iii: E#m  IV: F#  V: G#  vi: A#m  vii°: B#dim</Text>
+                        </View>
+
+                        {/* D Major */}
+                        <View style={{ backgroundColor: '#fff', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>D Major</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>I: D  ii: Em  iii: F#m  IV: G  V: A  vi: Bm  vii°: C#dim</Text>
+                        </View>
+
+                        {/* D# Major */}
+                        <View style={{ backgroundColor: '#fff', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>D# (Eb) Major</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>I: Eb  ii: Fm  iii: Gm  IV: Ab  V: Bb  vi: Cm  vii°: Ddim</Text>
+                        </View>
+
+                        {/* E Major */}
+                        <View style={{ backgroundColor: '#fff', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>E Major</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>I: E  ii: F#m  iii: G#m  IV: A  V: B  vi: C#m  vii°: D#dim</Text>
+                        </View>
+
+                        {/* F Major */}
+                        <View style={{ backgroundColor: '#fff', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>F Major</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>I: F  ii: Gm  iii: Am  IV: Bb  V: C  vi: Dm  vii°: Edim</Text>
+                        </View>
+
+                        {/* F# Major */}
+                        <View style={{ backgroundColor: '#fff', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>F# (Gb) Major</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>I: F#  ii: G#m  iii: A#m  IV: B  V: C#  vi: D#m  vii°: E#dim</Text>
+                        </View>
+
+                        {/* G Major */}
+                        <View style={{ backgroundColor: '#fff', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>G Major</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>I: G  ii: Am  iii: Bm  IV: C  V: D  vi: Em  vii°: F#dim</Text>
+                        </View>
+
+                        {/* G# Major */}
+                        <View style={{ backgroundColor: '#fff', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>G# (Ab) Major</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>I: Ab  ii: Bbm  iii: Cm  IV: Db  V: Eb  vi: Fm  vii°: Gdim</Text>
+                        </View>
+
+                        {/* A Major */}
+                        <View style={{ backgroundColor: '#fff', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>A Major</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>I: A  ii: Bm  iii: C#m  IV: D  V: E  vi: F#m  vii°: G#dim</Text>
+                        </View>
+
+                        {/* A# Major */}
+                        <View style={{ backgroundColor: '#fff', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>A# (Bb) Major</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>I: Bb  ii: Cm  iii: Dm  IV: Eb  V: F  vi: Gm  vii°: Adim</Text>
+                        </View>
+
+                        {/* B Major */}
+                        <View style={{ backgroundColor: '#fff', borderRadius: 10, padding: 12 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>B Major</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>I: B  ii: C#m  iii: D#m  IV: E  V: F#  vi: G#m  vii°: A#dim</Text>
+                        </View>
+                    </View>
+
+                    {/* Minor Keys Section */}
+                    <View style={{ marginBottom: 20 }}>
+                        <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#7B1FA2', marginBottom: 10, paddingLeft: 8 }}>🎸 MINOR KEYS & CHORDS (All 12 Keys)</Text>
+                        
+                        {/* A Minor */}
+                        <View style={{ backgroundColor: '#f3e5f5', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>A Minor (Natural)</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>i: Am  ii°: Bdim  III: C  iv: Dm  v: Em  VI: F  VII: G</Text>
+                        </View>
+
+                        {/* A# Minor */}
+                        <View style={{ backgroundColor: '#f3e5f5', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>A# (Bb) Minor (Natural)</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>i: Bbm  ii°: Cdim  III: Db  iv: Ebm  v: Fm  VI: Gb  VII: Ab</Text>
+                        </View>
+
+                        {/* B Minor */}
+                        <View style={{ backgroundColor: '#f3e5f5', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>B Minor (Natural)</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>i: Bm  ii°: C#dim  III: D  iv: Em  v: F#m  VI: G  VII: A</Text>
+                        </View>
+
+                        {/* C Minor */}
+                        <View style={{ backgroundColor: '#f3e5f5', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>C Minor (Natural)</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>i: Cm  ii°: Ddim  III: Eb  iv: Fm  v: Gm  VI: Ab  VII: Bb</Text>
+                        </View>
+
+                        {/* C# Minor */}
+                        <View style={{ backgroundColor: '#f3e5f5', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>C# Minor (Natural)</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>i: C#m  ii°: D#dim  III: E  iv: F#m  v: G#m  VI: A  VII: B</Text>
+                        </View>
+
+                        {/* D Minor */}
+                        <View style={{ backgroundColor: '#f3e5f5', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>D Minor (Natural)</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>i: Dm  ii°: Edim  III: F  iv: Gm  v: Am  VI: Bb  VII: C</Text>
+                        </View>
+
+                        {/* D# Minor */}
+                        <View style={{ backgroundColor: '#f3e5f5', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>D# (Eb) Minor (Natural)</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>i: Ebm  ii°: Fdim  III: Gb  iv: Abm  v: Bbm  VI: Cb  VII: Db</Text>
+                        </View>
+
+                        {/* E Minor */}
+                        <View style={{ backgroundColor: '#f3e5f5', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>E Minor (Natural)</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>i: Em  ii°: F#dim  III: G  iv: Am  v: Bm  VI: C  VII: D</Text>
+                        </View>
+
+                        {/* F Minor */}
+                        <View style={{ backgroundColor: '#f3e5f5', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>F Minor (Natural)</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>i: Fm  ii°: Gdim  III: Ab  iv: Bbm  v: Cm  VI: Db  VII: Eb</Text>
+                        </View>
+
+                        {/* F# Minor */}
+                        <View style={{ backgroundColor: '#f3e5f5', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>F# (Gb) Minor (Natural)</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>i: F#m  ii°: G#dim  III: A  iv: Bm  v: C#m  VI: D  VII: E</Text>
+                        </View>
+
+                        {/* G Minor */}
+                        <View style={{ backgroundColor: '#f3e5f5', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>G Minor (Natural)</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>i: Gm  ii°: Adim  III: Bb  iv: Cm  v: Dm  VI: Eb  VII: F</Text>
+                        </View>
+
+                        {/* G# Minor */}
+                        <View style={{ backgroundColor: '#f3e5f5', borderRadius: 10, padding: 12 }}>
+                            <Text style={{ fontSize: 11, fontWeight: '600', color: '#333', marginBottom: 4 }}>G# (Ab) Minor (Natural)</Text>
+                            <Text style={{ fontSize: 10, color: '#555', lineHeight: 16, fontFamily: 'monospace' }}>i: G#m  ii°: A#dim  III: B  iv: C#m  v: D#m  VI: E  VII: F#</Text>
+                        </View>
+                    </View>
+
+                    {/* Quick Reference */}
+                    <View style={{ backgroundColor: '#fff9c4', borderRadius: 10, padding: 12, marginBottom: 20 }}>
+                        <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#F57F17', marginBottom: 8 }}>💡 Music Theory Reference</Text>
+                        <Text style={{ fontSize: 10, color: '#555', lineHeight: 16 }}>
+                            • Major chords: Root + Major 3rd + Perfect 5th{'\n'}
+                            • Minor chords: Root + Minor 3rd + Perfect 5th{'\n'}
+                            • I, IV, V are primary chords{'\n'}
+                            • vi is the relative minor of I major{'\n'}
+                            • All 12 chromatic keys included (C→B)
+                        </Text>
+                    </View>
+            </ScrollView>
+            
             <TouchableOpacity
                 style={{ backgroundColor: '#2196F3', borderRadius: 16, paddingVertical: 14, paddingHorizontal: 32, marginTop: 10, marginBottom: 10 }}
                 onPress={onClose}
@@ -118,6 +562,12 @@ export default function App() {
     const [modalCurrentPartIndex, setModalCurrentPartIndex] = useState(null);
     
     const [isCollapsed, setIsCollapsed] = useState(true);
+    const [mainTab, setMainTab] = useState('SETLIST'); // 'SETLIST' | 'SONGS' | 'TOOLS'
+    const [bottomBoxHeight, setBottomBoxHeight] = useState(40);
+    const [appInfoModalVisible, setAppInfoModalVisible] = useState(false);
+    const [activityLogContent, setActivityLogContent] = useState('');
+    const [dbViewerModalVisible, setDbViewerModalVisible] = useState(false);
+    const [dbContent, setDbContent] = useState('');
 
     const [title, setTitle] = useState('');
     const [artist, setArtist] = useState('');
@@ -130,6 +580,8 @@ export default function App() {
 
     const [sortOldestFirst, setSortOldestFirst] = useState(false);
     const [lyricsFontSize, setLyricsFontSize] = useState(16);
+    // Dynamic height for lyrics input in Add Song modal
+    const [lyricsInputHeight, setLyricsInputHeight] = useState(120);
 
     const loadAllData = useCallback(async () => {
         if (!db) return; 
@@ -150,6 +602,102 @@ export default function App() {
             Alert.alert('Load Error', 'Failed to retrieve all data from DB.');
         }
     }, [db]);
+
+    // Function to load database summary for viewing
+    const viewDatabaseInfo = async () => {
+        if (!db) {
+            Alert.alert('Error', 'Database not initialized');
+            return;
+        }
+        try {
+            const songCount = await db.getFirstAsync('SELECT COUNT(*) as count FROM Song');
+            const setlistCount = await db.getFirstAsync('SELECT COUNT(*) as count FROM Setlist');
+            const partCount = await db.getFirstAsync('SELECT COUNT(*) as count FROM ProgramPart');
+            const memoCount = await db.getFirstAsync('SELECT COUNT(*) as count FROM VoiceMemo');
+            
+            // Get all songs data
+            const allSongs = await db.getAllAsync('SELECT * FROM Song');
+            const allSetlists = await db.getAllAsync('SELECT * FROM Setlist');
+            const allParts = await db.getAllAsync('SELECT * FROM ProgramPart');
+            const allMemos = await db.getAllAsync('SELECT * FROM VoiceMemo');
+            
+            let dbInfo = `DATABASE SUMMARY\n`;
+            dbInfo += `================================\n\n`;
+            dbInfo += `STATISTICS:\n`;
+            dbInfo += `Total Songs: ${songCount.count}\n`;
+            dbInfo += `Total Setlists: ${setlistCount.count}\n`;
+            dbInfo += `Total Program Parts: ${partCount.count}\n`;
+            dbInfo += `Total Voice Memos: ${memoCount.count}\n\n`;
+            
+            dbInfo += `SONGS (${allSongs.length}):\n`;
+            dbInfo += `--------------------------------\n`;
+            if (allSongs.length > 0) {
+                allSongs.forEach((song, idx) => {
+                    dbInfo += `${idx + 1}. ID: ${song.song_id}\n`;
+                    dbInfo += `   Title: ${song.title || '(empty)'}\n`;
+                    dbInfo += `   Artist: ${song.artist || '(empty)'}\n`;
+                    dbInfo += `   Key: ${song.key || '(empty)'}\n`;
+                    dbInfo += `   Category: ${song.category || '(empty)'}\n`;
+                    dbInfo += `   Type: ${song.type || '(empty)'}\n`;
+                    dbInfo += `   Lyrics: ${song.lyrics ? song.lyrics.substring(0, 30) + '...' : '(empty)'}\n\n`;
+                });
+            } else {
+                dbInfo += `Nothing in it.\n\n`;
+            }
+            
+            dbInfo += `SETLISTS (${allSetlists.length}):\n`;
+            dbInfo += `--------------------------------\n`;
+            if (allSetlists.length > 0) {
+                allSetlists.forEach((setlist, idx) => {
+                    dbInfo += `${idx + 1}. ID: ${setlist.setlist_id}\n`;
+                    dbInfo += `   Name: ${setlist.name || '(empty)'}\n`;
+                    dbInfo += `   Created: ${setlist.date_created || '(empty)'}\n`;
+                    dbInfo += `   Description: ${setlist.description || '(empty)'}\n\n`;
+                });
+            } else {
+                dbInfo += `Nothing in it.\n\n`;
+            }
+            
+            dbInfo += `PROGRAM PARTS (${allParts.length}):\n`;
+            dbInfo += `--------------------------------\n`;
+            if (allParts.length > 0) {
+                allParts.forEach((part, idx) => {
+                    const setlist = allSetlists.find(s => s.setlist_id === part.setlist_id);
+                    const song = allSongs.find(s => s.song_id === part.song_id);
+                    dbInfo += `${idx + 1}. ID: ${part.part_id}\n`;
+                    dbInfo += `   Title: ${part.title || '(empty)'}\n`;
+                    dbInfo += `   Setlist: ${setlist?.name || '(empty)'} (ID: ${part.setlist_id})\n`;
+                    dbInfo += `   Song: ${song?.title || '(empty)'} (ID: ${part.song_id || '(empty)'})\n\n`;
+                });
+            } else {
+                dbInfo += `Nothing in it.\n\n`;
+            }
+            
+            dbInfo += `VOICE MEMOS (${allMemos.length}):\n`;
+            dbInfo += `--------------------------------\n`;
+            if (allMemos.length > 0) {
+                allMemos.forEach((memo, idx) => {
+                    const part = allParts.find(p => p.part_id === memo.part_id);
+                    const setlist = allSetlists.find(s => s.setlist_id === memo.setlist_id);
+                    const durationSec = memo.duration ? (memo.duration / 1000).toFixed(2) : '(empty)';
+                    dbInfo += `${idx + 1}. ID: ${memo.memo_id}\n`;
+                    dbInfo += `   Setlist: ${setlist?.name || '(empty)'} (ID: ${memo.setlist_id})\n`;
+                    dbInfo += `   Part: ${part?.title || '(empty)'} (ID: ${memo.part_id || '(empty)'})\n`;
+                    dbInfo += `   Duration: ${durationSec} seconds\n`;
+                    dbInfo += `   Recorded: ${memo.date_recorded || '(empty)'}\n`;
+                    dbInfo += `   File Path: ${memo.file_path || '(empty)'}\n\n`;
+                });
+            } else {
+                dbInfo += `Nothing in it.\n`;
+            }
+            
+            setDbContent(dbInfo);
+            setDbViewerModalVisible(true);
+        } catch (error) {
+            console.error('Error loading database info:', error);
+            Alert.alert('Error', 'Failed to load database information');
+        }
+    };
 
     useEffect(() => {
         async function prepareDb() {
@@ -193,6 +741,11 @@ export default function App() {
                 setAllSongsScreenVisible(false);
                 return true;
             }
+            // Handle tab navigation back to SETLIST
+            if (mainTab === 'SONGS' || mainTab === 'TOOLS') {
+                setMainTab('SETLIST');
+                return true;
+            }
             if (currentSetlist) {
                 setCurrentSetlist(null);
                 setIsCollapsed(true);
@@ -211,7 +764,7 @@ export default function App() {
         };
         const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
         return () => subscription.remove();
-    }, [modalVisible, songFormModalVisible, setlistFormModalVisible, pictureScreenVisible, allSongsScreenVisible, currentSetlist]);
+    }, [modalVisible, songFormModalVisible, setlistFormModalVisible, pictureScreenVisible, allSongsScreenVisible, currentSetlist, mainTab]);
 
     const addSong = () => {
         if (!title || !artist) { Alert.alert('Validation', 'Please enter at least title and artist.'); return; }
@@ -221,6 +774,7 @@ export default function App() {
             [title, artist, key, lyrics, category, type]
         )
         .then(() => {
+            logActivityToFile('CREATE', 'Song', null, { title, artist, key, lyrics, category, type });
             Alert.alert('Success', 'Song added successfully!');
             setTitle(''); setArtist(''); setKey(''); setLyrics(''); setCategory(''); setType('');
             setSongFormModalVisible(false);
@@ -230,6 +784,23 @@ export default function App() {
             console.error('Insert error:', error);
             Alert.alert('Error', 'Failed to add song.');
         });
+    };
+
+    // --- Update Setlist (name, description) ---
+    const updateSetlist = async (setlistId, newName, newDescription) => {
+        if (!db) { Alert.alert('Error', 'Database not initialized yet!'); throw new Error('DB not initialized'); }
+        try {
+            await db.runAsync(`UPDATE Setlist SET name = ?, description = ? WHERE setlist_id = ?`, [newName, newDescription, setlistId]);
+            logActivityToFile('UPDATE', 'Setlist', setlistId, { name: newName, description: newDescription });
+            await loadAllData();
+            if (currentSetlist && currentSetlist.setlist_id === setlistId) {
+                setCurrentSetlist(prev => ({ ...prev, name: newName, description: newDescription }));
+            }
+        } catch (error) {
+            console.error('Update setlist error:', error);
+            Alert.alert('Error', 'Failed to update setlist.');
+            throw error;
+        }
     };
     
     const deleteSong = async (songId) => {
@@ -264,6 +835,22 @@ export default function App() {
         );
     };
 
+    // --- Update Song (used by AllSongsScreen edit) ---
+    const updateSong = async (songId, updates) => {
+        if (!db) { Alert.alert('Error', 'Database not initialized yet!'); throw new Error('DB not initialized'); }
+        try {
+            await db.runAsync(
+                `UPDATE Song SET title = ?, artist = ?, key = ?, lyrics = ?, category = ?, type = ? WHERE song_id = ?`,
+                [updates.title || '', updates.artist || '', updates.key || '', updates.lyrics || '', updates.category || '', updates.type || '', songId]
+            );
+            await loadAllData();
+        } catch (error) {
+            console.error('Update song error:', error);
+            Alert.alert('Error', 'Failed to update song.');
+            throw error;
+        }
+    };
+
 
     const addSetlist = () => {
         if (!setlistName) { Alert.alert('Validation', 'Please enter a name for the Setlist.'); return; }
@@ -275,6 +862,7 @@ export default function App() {
             [setlistName, dateCreated, setlistDescription]
         )
         .then(() => {
+            logActivityToFile('CREATE', 'Setlist', null, { name: setlistName, description: setlistDescription });
             Alert.alert('Success', 'Setlist created successfully!');
             setSetlistName('');
             setSetlistDescription('');
@@ -300,9 +888,7 @@ export default function App() {
                     style: "destructive", 
                     onPress: async () => {
                         try {
-                            // 1. Delete associated ProgramParts
                             await db.runAsync(`DELETE FROM ProgramPart WHERE setlist_id = ?`, [setlistId]);
-
                             // 2. Delete associated VoiceMemos (files and DB records)
                             const memosToDelete = voiceMemos.filter(m => m.setlist_id === setlistId);
                             for (const memo of memosToDelete) {
@@ -316,10 +902,8 @@ export default function App() {
                                 }
                             }
                             await db.runAsync(`DELETE FROM VoiceMemo WHERE setlist_id = ?`, [setlistId]);
-
-                            // 3. Delete the Setlist itself
                             await db.runAsync(`DELETE FROM Setlist WHERE setlist_id = ?`, [setlistId]);
-                            
+                            logActivityToFile('DELETE', 'Setlist', setlistId, { action: 'Setlist deleted' });
                             setCurrentSetlist(null);
                             await loadAllData(); 
                             Alert.alert('Success', 'Setlist and all related data deleted successfully!');
@@ -341,6 +925,7 @@ export default function App() {
             const result = await db.runAsync(`INSERT INTO ProgramPart (setlist_id, title) VALUES (?, ?)`, [setlistId, partTitle]);
             const newPart = { part_id: result.lastInsertRowId, setlist_id: setlistId, title: partTitle, song_id: null, };
             setProgramParts(prev => [...prev, newPart]);
+            logActivityToFile('CREATE', 'ProgramPart', result.lastInsertRowId, { title: partTitle, setlist_id: setlistId });
             Alert.alert('Success', `Program Part "${partTitle}" added!`);
         } catch (error) {
             console.error('Insert Program Part error:', error);
@@ -354,6 +939,7 @@ export default function App() {
         try {
             await db.runAsync(`DELETE FROM ProgramPart WHERE part_id = ?`, [partId]);
             setProgramParts(prev => prev.filter(part => part.part_id !== partId));
+            logActivityToFile('DELETE', 'ProgramPart', partId, { action: 'Program part deleted' });
             Alert.alert('Success', 'Program Part deleted successfully.');
         } catch (error) {
             console.error('Delete Program Part error:', error);
@@ -361,20 +947,22 @@ export default function App() {
         }
     };
 
-    const addVoiceMemo = async (setlistId, filePath) => {
+    const addVoiceMemo = async (setlistId, partId, filePath) => {
         if (!db || !filePath || setlistId === null || setlistId === undefined) { 
             console.error('Add Voice Memo Error: DB, filePath, or setlistId missing.');
+            logActivityToFile('ERROR', 'VoiceMemo', null, { error: 'Missing DB, filePath, or setlistId' });
             return Alert.alert('Error', 'Cannot save memo. Check logs.');
         }
 
         try {
             const dateCreated = new Date().toISOString().split('T')[0];
             const result = await db.runAsync(
-                `INSERT INTO VoiceMemo (setlist_id, file_path, date_recorded) VALUES (?, ?, ?)`,
-                [setlistId, filePath, dateCreated]
+                `INSERT INTO VoiceMemo (setlist_id, part_id, file_path, date_recorded) VALUES (?, ?, ?, ?)`,
+                [setlistId, partId || null, filePath, dateCreated]
             );
             
-            const newMemo = { memo_id: result.lastInsertRowId, setlist_id: setlistId, file_path: filePath, date_recorded: dateCreated, };
+            const newMemo = { memo_id: result.lastInsertRowId, setlist_id: setlistId, part_id: partId || null, file_path: filePath, date_recorded: dateCreated, };
+            logActivityToFile('CREATE', 'VoiceMemo', result.lastInsertRowId, { setlist_id: setlistId, part_id: partId, date_recorded: dateCreated });
 
             setVoiceMemos(prev => [...prev, newMemo]);
             return newMemo;
@@ -393,6 +981,7 @@ export default function App() {
 
         // Optimistically update state
         setVoiceMemos(prev => prev.filter(memo => memo.memo_id !== memoId));
+        logActivityToFile('DELETE', 'VoiceMemo', memoId, { file_path: memoToDelete.file_path });
         Alert.alert('Success', 'Voice memo removed from list.');
         
         // 1. Delete file system entry
@@ -413,6 +1002,122 @@ export default function App() {
         } catch (dbError) {
             console.error('VoiceMemo DB Deletion Failed:', dbError);
         }
+    };
+
+    // --- Recording / Playback (per-part memos) ---
+    const RECORDING_DIR = FileSystem.documentDirectory + 'voiceMemos/';
+    const [recording, setRecording] = useState(null);
+    const [sound, setSound] = useState(null);
+    const [recordingPartId, setRecordingPartId] = useState(null);
+    const [playingMemoId, setPlayingMemoId] = useState(null);
+
+    const prepareRecordingDir = async () => {
+        try {
+            const dirInfo = await FileSystem.getInfoAsync(RECORDING_DIR);
+            if (!dirInfo.exists) {
+                await FileSystem.makeDirectoryAsync(RECORDING_DIR, { intermediates: true });
+            }
+        } catch (err) {
+            console.warn('Could not prepare recording dir', err);
+        }
+    };
+
+    const startRecording = async (partId) => {
+        // ensure only from within a part context
+        setRecordingPartId(partId);
+        logActivityToFile('ACTION', 'Recording', null, { action: 'Recording started', part_id: partId });
+        try {
+            await prepareRecordingDir();
+            await Audio.requestPermissionsAsync();
+            await Audio.setAudioModeAsync({
+                allowsRecording: true,
+                playsInSilentModeIOS: true,
+                shouldDuckAndroid: true,
+                playThroughEarpieceAndroid: false,
+            });
+            const { recording: newRecording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+            setRecording(newRecording);
+        } catch (err) {
+            console.error('Failed to start recording', err);
+            Alert.alert('Error', 'Failed to start recording.');
+            setRecordingPartId(null);
+        }
+    };
+
+    const stopRecording = async () => {
+        if (!recording) return;
+        try {
+            await recording.stopAndUnloadAsync();
+        } catch (e) {
+            // ignore
+        }
+        await Audio.setAudioModeAsync({ allowsRecording: false });
+        const uri = recording.getURI();
+        setRecording(null);
+        if (!uri) { setRecordingPartId(null); return; }
+
+        const fileName = `memo_${Date.now()}.m4a`;
+        const newFilePath = RECORDING_DIR + fileName;
+        try {
+            await FileSystem.moveAsync({ from: uri, to: newFilePath });
+            logActivityToFile('ACTION', 'Recording', null, { action: 'Recording stopped and saved', part_id: recordingPartId, file: fileName });
+            const result = await addVoiceMemo(currentSetlist.setlist_id, recordingPartId, newFilePath);
+            if (!result) {
+                await FileSystem.deleteAsync(newFilePath, { idempotent: true });
+                Alert.alert('Save Error', 'Failed to save recording metadata.');
+            }
+        } catch (err) {
+            console.error('Error saving recording', err);
+            Alert.alert('Save Error', 'Failed to save recording file.');
+        }
+        setRecordingPartId(null);
+    };
+
+    const togglePlaybackForMemo = async (memo) => {
+        if (!memo) return;
+        const uri = memo.file_path;
+        if (sound && playingMemoId === memo.memo_id) {
+            const status = await sound.getStatusAsync();
+            if (status.isPlaying) {
+                await sound.pauseAsync();
+                logActivityToFile('ACTION', 'Playback', null, { action: 'Memo paused', memo_id: memo.memo_id });
+            } else {
+                await sound.playAsync();
+                logActivityToFile('ACTION', 'Playback', null, { action: 'Memo resumed', memo_id: memo.memo_id });
+            }
+            return;
+        }
+        if (sound) {
+            try { await sound.unloadAsync(); } catch (e) {}
+            setSound(null);
+            setPlayingMemoId(null);
+        }
+        try {
+            const { sound: newSound } = await Audio.Sound.createAsync({ uri }, { shouldPlay: true }, (status) => {
+                if (status.didJustFinish) {
+                    newSound.unloadAsync();
+                    setSound(null);
+                    setPlayingMemoId(null);
+                    logActivityToFile('ACTION', 'Playback', null, { action: 'Memo finished', memo_id: memo.memo_id });
+                }
+            });
+            setSound(newSound);
+            setPlayingMemoId(memo.memo_id);
+            logActivityToFile('ACTION', 'Playback', null, { action: 'Memo playing', memo_id: memo.memo_id });
+            await newSound.playAsync();
+        } catch (err) {
+            console.error('Playback error', err);
+            Alert.alert('Playback Error', 'Failed to play memo.');
+        }
+    };
+
+    const handleDeleteMemo = async (memoId) => {
+        if (sound && playingMemoId === memoId) {
+            try { await sound.unloadAsync(); } catch (e) {}
+            setSound(null);
+            setPlayingMemoId(null);
+        }
+        await deleteVoiceMemo(memoId);
     };
 
     const updateSongForPart = async (partId, songId) => {
@@ -498,21 +1203,25 @@ export default function App() {
         return <Text style={styles.loadingText}>Loading database...</Text>;
     }
     
-    if (pictureScreenVisible) {
-        return <AddPictureScreen onClose={() => setPictureScreenVisible(false)} />;
-    }
-    
-    if (allSongsScreenVisible) {
-        return (
-            <AllSongsScreen 
-                songs={songs} 
-                onSongPress={(song) => {
-                    setAllSongsScreenVisible(false);
-                    handleSongPress(song);
-                }}
-                onClose={handleHomePress} 
-            />
-        );
+    // Navigation for main tabs
+    if (!currentSetlist) {
+        if (mainTab === 'SONGS') {
+            return (
+                <AllSongsScreen 
+                    songs={songs} 
+                    onSongPress={(song) => {
+                        setMainTab('SONGS');
+                        handleSongPress(song);
+                    }}
+                    onClose={() => setMainTab('SETLIST')}
+                    onDeleteSong={deleteSong}
+                    onUpdateSong={updateSong}
+                />
+            );
+        }
+        if (mainTab === 'TOOLS') {
+            return <AddPictureScreen onClose={() => setMainTab('SETLIST')} />;
+        }
     }
 
 
@@ -534,7 +1243,9 @@ export default function App() {
                         deleteVoiceMemo={deleteVoiceMemo}
                         updateSongForPart={updateSongForPart}
                         handleViewSongDetails={handleViewSongDetails}
+                        updateSetlist={updateSetlist}
                         deleteSetlist={deleteSetlist}
+                        setSongFormModalVisible={setSongFormModalVisible}
                     />
                 ) : (
                     <View style={styles.homeScreenWrapper}>
@@ -575,14 +1286,10 @@ export default function App() {
                             {!isCollapsed && (
                                 <Pressable
                                     style={[styles.fabOptionMinimal, { backgroundColor: '#e3f0fa', flexDirection: 'row', alignItems: 'center' }]}
-                                    onPress={() => {
-                                        Alert.alert(
-                                            'App Information',
-                                            'Prepared by: Team JJJM (Group 1)\nJainie M. Eking\nJohari Gandawali\nMickey Nadayag\nJade B. Ramos\n\nUniversity of Science and Technology of Southern Philippines\nMain Campus - Alubijid\n\nPassed for Software Engineering Project\n2025',
-                                            [
-                                                { text: 'OK', style: 'default' }
-                                            ]
-                                        );
+                                    onPress={async () => {
+                                        const logContent = await readActivityLogFile();
+                                        setActivityLogContent(logContent);
+                                        setAppInfoModalVisible(true);
                                     }}
                                 >
                                     <Text style={{ color: '#2196F3', fontWeight: 'bold', fontSize: 18, marginRight: 8 }}>i</Text>
@@ -605,16 +1312,6 @@ export default function App() {
                                     <Text style={styles.fabTextMinimal}>Add New Song</Text>
                                 </Pressable>
                             )}
-                            {!isCollapsed && (
-                                <Pressable style={[styles.fabOptionMinimal]} onPress={openAllSongsScreen}>
-                                    <Text style={styles.fabTextMinimal}>View All Songs</Text>
-                                </Pressable>
-                            )}
-                            {!isCollapsed && (
-                                <Pressable style={[styles.fabOptionMinimal]} onPress={openPictureScreen}>
-                                    <Text style={styles.fabTextMinimal}>Practice Resources</Text>
-                                </Pressable>
-                            )}
                             <TouchableOpacity
                                 style={styles.fabMainMinimal}
                                 onPress={() => setIsCollapsed(!isCollapsed)}
@@ -622,17 +1319,159 @@ export default function App() {
                                 <Text style={styles.fabMainTextMinimal}>{isCollapsed ? '+' : 'x'}</Text>
                             </TouchableOpacity>
                         </View>
+                        {/* Bottom Navigation Bar */}
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', backgroundColor: '#e3f0fa', paddingBottom: 18, paddingTop: 6, borderTopWidth: 1, borderColor: '#b3c6e6', marginTop: 8 }}>
+                            <TouchableOpacity onPress={() => setMainTab('SETLIST')} style={{ alignItems: 'center', flex: 1 }}>
+                                <Feather name="list" size={24} color={mainTab === 'SETLIST' ? '#2196F3' : '#7bb6f7'} />
+                                <Text style={{ color: mainTab === 'SETLIST' ? '#2196F3' : '#7bb6f7', fontWeight: 'bold', fontSize: 13, marginTop: 2 }}>SETLIST</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity onPress={() => setMainTab('SONGS')} style={{ alignItems: 'center', flex: 1 }}>
+                                <Feather name="music" size={24} color={mainTab === 'SONGS' ? '#2196F3' : '#7bb6f7'} />
+                                <Text style={{ color: mainTab === 'SONGS' ? '#2196F3' : '#7bb6f7', fontWeight: 'bold', fontSize: 13, marginTop: 2 }}>SONGS</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity onPress={() => setMainTab('TOOLS')} style={{ alignItems: 'center', flex: 1 }}>
+                                <Feather name="tool" size={24} color={mainTab === 'TOOLS' ? '#2196F3' : '#7bb6f7'} />
+                                <Text style={{ color: mainTab === 'TOOLS' ? '#2196F3' : '#7bb6f7', fontWeight: 'bold', fontSize: 13, marginTop: 2 }}>TOOLS</Text>
+                            </TouchableOpacity>
+                        </View>
+                        {/* Blank Box Below Navbar */}
+                        <View style={{ backgroundColor: '#f7fbff', height: bottomBoxHeight, borderTopWidth: 1, borderColor: '#e3f0fa' }} />
                     </View>
                 )}
             </View>
+            {/* App Info Modal with Activity Log */}
+            <Modal
+                animationType="slide"
+                transparent={true}
+                visible={appInfoModalVisible}
+                onRequestClose={() => setAppInfoModalVisible(false)}
+            >
+                <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' }}>
+                    <View style={{ backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '90%', padding: 20, paddingBottom: 32 }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                            <Text style={{ fontSize: 24, fontWeight: 'bold', color: '#2196F3' }}>App Information</Text>
+                            <TouchableOpacity onPress={() => setAppInfoModalVisible(false)}>
+                                <Feather name="x" size={28} color="#2196F3" />
+                            </TouchableOpacity>
+                        </View>
+
+                        <ScrollView style={{ maxHeight: '100%' }} showsVerticalScrollIndicator={true}>
+                            {/* App Info Section */}
+                            <View style={{ marginBottom: 20, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: '#e0e0e0' }}>
+                                <Text style={{ fontSize: 16, fontWeight: '600', color: '#333', marginBottom: 8 }}>Prepared by: Team JJJM (Group 1)</Text>
+                                <Text style={{ fontSize: 14, color: '#666', lineHeight: 20, marginBottom: 12 }}>
+                                    Jainie M. Eking{'\n'}
+                                    Johari Gandawali{'\n'}
+                                    Mickey Nadayag{'\n'}
+                                    Jade B. Ramos
+                                </Text>
+                                <Text style={{ fontSize: 14, color: '#666', fontWeight: '500', marginBottom: 4 }}>
+                                    University of Science and Technology of Southern Philippines
+                                </Text>
+                                <Text style={{ fontSize: 13, color: '#666' }}>
+                                    Main Campus - Alubijid
+                                </Text>
+                                <Text style={{ fontSize: 13, color: '#999', marginTop: 8 }}>
+                                    Passed for Software Engineering Project • 2025
+                                </Text>
+                            </View>
+
+                            {/* Activity Log Section */}
+                            <View>
+                                <Text style={{ fontSize: 16, fontWeight: '600', color: '#333', marginBottom: 12 }}>📋 Activity Log</Text>
+                                <View style={{ backgroundColor: '#f5f5f5', borderRadius: 8, padding: 12, maxHeight: 300 }}>
+                                    {activityLogContent.trim() ? (
+                                        <ScrollView nestedScrollEnabled={true}>
+                                            <Text style={{ fontSize: 12, color: '#333', lineHeight: 18, fontFamily: 'monospace' }}>
+                                                {activityLogContent}
+                                            </Text>
+                                        </ScrollView>
+                                    ) : (
+                                        <Text style={{ fontSize: 13, color: '#999', textAlign: 'center', paddingVertical: 20 }}>
+                                            No activity logged yet.
+                                        </Text>
+                                    )}
+                                </View>
+                                <TouchableOpacity
+                                    style={{ backgroundColor: '#2196F3', borderRadius: 8, paddingVertical: 10, marginTop: 12, alignItems: 'center' }}
+                                    onPress={async () => {
+                                        try {
+                                            await Sharing.shareAsync(LOG_FILE);
+                                        } catch (err) {
+                                            Alert.alert('Error', 'Unable to share log file.');
+                                        }
+                                    }}
+                                >
+                                    <Text style={{ color: 'white', fontWeight: '600', fontSize: 14 }}>📤 Share Activity Log</Text>
+                                </TouchableOpacity>
+                            </View>
+
+                            {/* Database Viewer Section */}
+                            <View style={{ marginTop: 20, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#e0e0e0' }}>
+                                <Text style={{ fontSize: 16, fontWeight: '600', color: '#333', marginBottom: 12 }}>💾 Database Information</Text>
+                                <TouchableOpacity
+                                    style={{ backgroundColor: '#4CAF50', borderRadius: 8, paddingVertical: 10, alignItems: 'center' }}
+                                    onPress={viewDatabaseInfo}
+                                >
+                                    <Text style={{ color: 'white', fontWeight: '600', fontSize: 14 }}>📊 View Database</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </ScrollView>
+
+                        <TouchableOpacity
+                            style={{ backgroundColor: '#e3f0fa', borderRadius: 8, paddingVertical: 12, marginTop: 16, alignItems: 'center' }}
+                            onPress={() => setAppInfoModalVisible(false)}
+                        >
+                            <Text style={{ color: '#2196F3', fontWeight: 'bold', fontSize: 14 }}>Close</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* Database Viewer Modal - Fullscreen */}
+            <Modal
+                animationType="slide"
+                transparent={false}
+                visible={dbViewerModalVisible}
+                onRequestClose={() => setDbViewerModalVisible(false)}
+            >
+                <View style={{ flex: 1, backgroundColor: '#fff', paddingTop: 4, paddingBottom: 4 }}>
+                    {/* Header */}
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#e3f0fa', borderBottomWidth: 1, borderBottomColor: '#2196F3' }}>
+                        <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#2196F3' }}>💾 Database Contents</Text>
+                        <TouchableOpacity onPress={() => setDbViewerModalVisible(false)}>
+                            <Feather name="x" size={28} color="#2196F3" />
+                        </TouchableOpacity>
+                    </View>
+
+                    {/* Database Content */}
+                    <ScrollView style={{ flex: 1, paddingHorizontal: 12, paddingVertical: 12 }}>
+                        <Text style={{ fontSize: 12, color: '#333', lineHeight: 18, fontFamily: 'monospace', backgroundColor: '#f5f5f5', padding: 12, borderRadius: 8 }}>
+                            {dbContent}
+                        </Text>
+                    </ScrollView>
+
+                    {/* Close Button */}
+                    <View style={{ flexDirection: 'row', gap: 4, paddingHorizontal: 8, paddingVertical: 2 }}>
+                        <TouchableOpacity
+                            style={{ flex: 1, backgroundColor: '#2196F3', borderRadius: 6, paddingVertical: 8, alignItems: 'center' }}
+                            onPress={() => setDbViewerModalVisible(false)}
+                        >
+                            <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 14 }}>Close</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
+
             <Modal
                 animationType="slide"
                 transparent={true}
                 visible={setlistFormModalVisible}
                 onRequestClose={() => setSetlistFormModalVisible(false)}
             >
-                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(33,150,243,0.08)' }}>
-                    <View style={{ width: '90%', backgroundColor: '#fff', borderRadius: 18, padding: 28, alignItems: 'center', shadowColor: '#2196F3', shadowOpacity: 0.08, shadowRadius: 12, elevation: 8 }}>
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(33,150,243,0.08)', paddingBottom: 32 }}>
+
+                    <View style={{ width: '90%', backgroundColor: '#fff', borderRadius: 18, padding: 28, alignItems: 'center', shadowColor: '#2196F3', shadowOpacity: 0.08, shadowRadius: 12, elevation: 8, marginBottom: 32 }}>
                         <Text style={{ fontSize: 26, fontWeight: 'bold', color: '#2196F3', marginBottom: 18, letterSpacing: 1 }}>Create New Setlist</Text>
                         <TextInput 
                             style={[styles.input, { borderColor: '#b3c6e6', backgroundColor: '#e3f0fa', fontSize: 18, marginBottom: 14 }]} 
@@ -668,32 +1507,75 @@ export default function App() {
 
             <Modal
                 animationType="slide"
-                transparent={false}
+                transparent={true}
                 visible={songFormModalVisible}
                 onRequestClose={() => setSongFormModalVisible(false)}
             >
-                <View style={styles.formModalView}>
-                    <Text style={styles.formHeading}>Add New Song</Text>
-                    <TextInput style={styles.input} placeholder="Title" value={title} onChangeText={setTitle} />
-                    <TextInput style={styles.input} placeholder="Artist" value={artist} onChangeText={setArtist} />
-                    <TextInput style={styles.input} placeholder="Key" value={key} onChangeText={setKey} />
-                    <TextInput
-                        style={[styles.input, styles.multiline]}
-                        placeholder="Lyrics"
-                        value={lyrics}
-                        onChangeText={setLyrics}
-                        multiline
-                    />
-                    <TextInput style={styles.input} placeholder="Category" value={category} onChangeText={setCategory} />
-                    <TextInput style={styles.input} placeholder="Type" value={type} onChangeText={setType} />
-                    <Button title="Save Song" onPress={addSong} />
-
-                    <TouchableOpacity
-                        style={[styles.closeButton, {maxHeight: 50, marginTop: 20, backgroundColor: '#FF6347' }]}
-                        onPress={() => setSongFormModalVisible(false)}
-                    >
-                        <Text style={styles.closeButtonText}>Cancel</Text>
-                    </TouchableOpacity>
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(33,150,243,0.08)', paddingBottom: 32 }}>
+                    <View style={{ width: '90%', backgroundColor: '#fff', borderRadius: 18, padding: 28, alignItems: 'center', shadowColor: '#2196F3', shadowOpacity: 0.08, shadowRadius: 12, elevation: 8, maxHeight: '90%', marginBottom: 32 }}>
+                        <Text style={{ fontSize: 26, fontWeight: 'bold', color: '#2196F3', marginBottom: 18, letterSpacing: 1 }}>Add New Song</Text>
+                        <ScrollView style={{ width: '100%' }} showsVerticalScrollIndicator={false}>
+                            <TextInput
+                                style={[styles.input, { borderColor: '#b3c6e6', backgroundColor: '#e3f0fa', fontSize: 16, marginBottom: 12 }]}
+                                placeholder="Title (Required)"
+                                placeholderTextColor="#7bb6f7"
+                                value={title}
+                                onChangeText={setTitle}
+                            />
+                            <TextInput
+                                style={[styles.input, { borderColor: '#b3c6e6', backgroundColor: '#e3f0fa', fontSize: 16, marginBottom: 12 }]}
+                                placeholder="Artist (Required)"
+                                placeholderTextColor="#7bb6f7"
+                                value={artist}
+                                onChangeText={setArtist}
+                            />
+                            <TextInput
+                                style={[styles.input, { borderColor: '#b3c6e6', backgroundColor: '#e3f0fa', fontSize: 16, marginBottom: 12 }]}
+                                placeholder="Key"
+                                placeholderTextColor="#7bb6f7"
+                                value={key}
+                                onChangeText={setKey}
+                            />
+                            <TextInput
+                                style={[styles.input, { borderColor: '#b3c6e6', backgroundColor: '#e3f0fa', fontSize: 16, height: Math.max(100, lyricsInputHeight), textAlignVertical: 'top', marginBottom: 12 }]}
+                                placeholder="Lyrics"
+                                placeholderTextColor="#7bb6f7"
+                                value={lyrics}
+                                onChangeText={setLyrics}
+                                onContentSizeChange={(e) => {
+                                    const h = e.nativeEvent.contentSize.height;
+                                    setLyricsInputHeight(Math.min(300, Math.max(100, h)));
+                                }}
+                                multiline
+                            />
+                            <TextInput
+                                style={[styles.input, { borderColor: '#b3c6e6', backgroundColor: '#e3f0fa', fontSize: 16, marginBottom: 12 }]}
+                                placeholder="Category"
+                                placeholderTextColor="#7bb6f7"
+                                value={category}
+                                onChangeText={setCategory}
+                            />
+                            <TextInput
+                                style={[styles.input, { borderColor: '#b3c6e6', backgroundColor: '#e3f0fa', fontSize: 16, marginBottom: 14 }]}
+                                placeholder="Type"
+                                placeholderTextColor="#7bb6f7"
+                                value={type}
+                                onChangeText={setType}
+                            />
+                        </ScrollView>
+                        <TouchableOpacity
+                            style={{ backgroundColor: '#2196F3', borderRadius: 14, paddingVertical: 14, paddingHorizontal: 32, marginTop: 12, width: '100%', alignItems: 'center' }}
+                            onPress={addSong}
+                        >
+                            <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 17 }}>Save Song</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={{ backgroundColor: '#e3f0fa', borderRadius: 14, paddingVertical: 12, paddingHorizontal: 32, marginTop: 10, width: '100%', alignItems: 'center' }}
+                            onPress={() => setSongFormModalVisible(false)}
+                        >
+                            <Text style={{ color: '#2196F3', fontWeight: 'bold', fontSize: 16 }}>Cancel</Text>
+                        </TouchableOpacity>
+                    </View>
                 </View>
             </Modal>
 
@@ -704,51 +1586,98 @@ export default function App() {
                 onRequestClose={() => setModalVisible(false)}
             >
                 {selectedSong && (
-                    <View style={styles.modalView}>
-                        {/* Fixed Header: Program Part + Song Title + Font Size Controls */}
+                    <View style={[styles.modalView, { paddingBottom: 4 }]}>
+                        {/* Fixed Header: Program Part Name and Song Title */}
                         <View style={styles.songModalHeader}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', width: '100%', justifyContent: 'space-between' }}>
-                                <View style={{ flex: 1, alignItems: 'center' }}>
-                                    {modalProgramParts && modalProgramParts.length > 0 && modalCurrentPartIndex !== null && modalCurrentPartIndex >= 0 ? (
-                                        <>
-                                            <Text style={styles.songModalPartName}>
-                                                {modalProgramParts[modalCurrentPartIndex]?.title || 'Program Part'}
-                                            </Text>
-                                            <Text style={styles.songModalSongTitle}>
-                                                {selectedSong.title}
-                                            </Text>
-                                        </>
-                                    ) : (
-                                        <Text style={styles.songModalSongTitle}>{selectedSong.title}</Text>
-                                    )}
-                                </View>
-                                {/* Font size controls */}
-                                <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>
-                                    <TouchableOpacity
-                                        style={{ padding: 6, borderRadius: 8, backgroundColor: '#e3f0fa', marginRight: 4 }}
-                                        onPress={() => setLyricsFontSize(f => Math.max(12, f - 2))}
-                                    >
-                                        <Text style={{ fontSize: 18, color: '#2196F3', fontWeight: 'bold' }}>-</Text>
-                                    </TouchableOpacity>
-                                    <TouchableOpacity
-                                        style={{ padding: 6, borderRadius: 8, backgroundColor: '#e3f0fa' }}
-                                        onPress={() => setLyricsFontSize(f => Math.min(36, f + 2))}
-                                    >
-                                        <Text style={{ fontSize: 18, color: '#2196F3', fontWeight: 'bold' }}>+</Text>
-                                    </TouchableOpacity>
-                                </View>
-                            </View>
+                            {modalProgramParts && modalProgramParts.length > 0 && modalCurrentPartIndex !== null && modalCurrentPartIndex >= 0 ? (
+                                <>
+                                    <Text style={[styles.songModalPartName, { fontSize: 15, color: '#2196F3', fontWeight: '600', marginBottom: 2, textAlign: 'center' }]}> 
+                                        {modalProgramParts[modalCurrentPartIndex]?.title || 'Program Part'}
+                                    </Text>
+                                    <Text style={[styles.songModalSongTitle, { fontSize: 30, fontWeight: 'bold', color: '#222', marginBottom: 2, textAlign: 'center' }]}> 
+                                        {selectedSong.title}
+                                    </Text>
+                                </>
+                            ) : (
+                                <Text style={[styles.songModalSongTitle, { fontSize: 30, fontWeight: 'bold', color: '#222', marginBottom: 2, textAlign: 'center' }]}>{selectedSong.title}</Text>
+                            )}
                         </View>
-                        <Text style={styles.modalArtist}>by {selectedSong.artist}</Text>
-                        <Text style={styles.modalKey}>Key: {selectedSong.key || 'N/A'}</Text>
-                        <View style={styles.separator} />
-                        {/* Scrollable Lyrics and Navigation Buttons at Bottom */}
-                        <ScrollView style={styles.modalLyricsScroll} contentContainerStyle={{flexGrow: 1, justifyContent: 'space-between'}}>
-                            <Text style={[styles.modalLyricsText, { fontSize: lyricsFontSize }]}>
+
+                        {/* Scrollable Content: Song Info, Record Button, Font Controls, and Lyrics */}
+                        <ScrollView style={styles.modalLyricsScroll} contentContainerStyle={{flexGrow: 1}}>
+                            {/* Song Info */}
+                            <View>
+                                <Text style={styles.modalArtist}>by {selectedSong.artist}</Text>
+                                <Text style={styles.modalKey}>Key: {selectedSong.key || 'N/A'}</Text>
+                                <View style={styles.separator} />
+                            </View>
+                            
+                            {/* Memo controls + Font size controls - available only when opened from a program part */}
+                            {modalProgramParts && modalProgramParts.length > 0 && modalCurrentPartIndex !== null ? (() => {
+                                const currentPart = modalProgramParts[modalCurrentPartIndex];
+                                const partMemo = voiceMemos.find(m => m.part_id === currentPart.part_id);
+                                return (
+                                    <View style={{ paddingHorizontal: 16, marginBottom: 12, backgroundColor: '#f7fbff', borderRadius: 8, padding: 12, flexDirection: 'row', gap: 12 }}>
+                                        {/* Font Size Controls - Left Side */}
+                                        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start' }}>
+                                            <Text style={{ fontSize: 13, color: '#2196F3', fontWeight: '600', marginRight: 8 }}>Font Size</Text>
+                                            <TouchableOpacity
+                                                style={{ padding: 6, borderRadius: 6, backgroundColor: '#e3f0fa', marginRight: 4 }}
+                                                onPress={() => setLyricsFontSize(f => Math.max(12, f - 2))}
+                                            >
+                                                <Text style={{ fontSize: 16, color: '#2196F3', fontWeight: 'bold' }}>−</Text>
+                                            </TouchableOpacity>
+                                            <TouchableOpacity
+                                                style={{ padding: 6, borderRadius: 6, backgroundColor: '#e3f0fa' }}
+                                                onPress={() => setLyricsFontSize(f => Math.min(36, f + 2))}
+                                            >
+                                                <Text style={{ fontSize: 16, color: '#2196F3', fontWeight: 'bold' }}>+</Text>
+                                            </TouchableOpacity>
+                                        </View>
+                                        
+                                        {/* Memo controls - Right Side */}
+                                        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' }}>
+                                            {recording && recordingPartId === currentPart.part_id ? (
+                                                <>
+                                                    <Feather name="mic" size={18} color="#E53935" style={{ marginRight: 8 }} />
+                                                    <Text style={{ fontSize: 14, color: '#E53935', fontWeight: '600', marginRight: 8 }}>Recording...</Text>
+                                                    <TouchableOpacity style={{ padding: 8, backgroundColor: '#E53935', borderRadius: 6 }} onPress={stopRecording}>
+                                                        <Feather name="square" size={16} color="white" />
+                                                    </TouchableOpacity>
+                                                </>
+                                            ) : partMemo ? (
+                                                <>
+                                                    <Feather name="music" size={18} color="#4CAF50" style={{ marginRight: 8 }} />
+                                                    <Text style={{ fontSize: 14, color: '#333', fontWeight: '500', marginRight: 8 }}>Part Memo</Text>
+                                                    <TouchableOpacity style={{ padding: 6, backgroundColor: '#4CAF50', borderRadius: 6, marginRight: 6 }} onPress={() => togglePlaybackForMemo(partMemo)}>
+                                                        <Feather name={playingMemoId === partMemo.memo_id ? 'pause' : 'play'} size={16} color="white" />
+                                                    </TouchableOpacity>
+                                                    <TouchableOpacity style={{ padding: 6, backgroundColor: '#FFEBEE', borderRadius: 6 }} onPress={() => handleDeleteMemo(partMemo.memo_id)}>
+                                                        <Feather name="trash-2" size={16} color="#E53935" />
+                                                    </TouchableOpacity>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <Feather name="mic" size={18} color="#9C27B0" style={{ marginRight: 8 }} />
+                                                    <Text style={{ fontSize: 14, color: '#333', fontWeight: '500', marginRight: 8 }}>No Memo</Text>
+                                                    <TouchableOpacity style={{ padding: 8, backgroundColor: '#9C27B0', borderRadius: 6 }} onPress={() => startRecording(currentPart.part_id)}>
+                                                        <Feather name="mic" size={16} color="white" />
+                                                    </TouchableOpacity>
+                                                </>
+                                            )}
+                                        </View>
+                                    </View>
+                                );
+                            })() : null}
+
+                            {/* Lyrics */}
+                            <Text style={[styles.modalLyricsText, { fontSize: lyricsFontSize, lineHeight: Math.round(lyricsFontSize * 1.35) }]}> 
                                 {selectedSong.lyrics || 'No lyrics available for this song.'}
                             </Text>
-                            {/* Navigation Buttons Row (at bottom, scrolls with lyrics) */}
-                            <View style={styles.modalButtonRow}>
+                        </ScrollView>
+                        
+                        {/* Navigation Buttons Row (fixed at bottom, outside scroll) */}
+                        <View style={styles.modalButtonRow}>
                                 {/* Previous Part Button (left) */}
                                 {modalProgramParts && modalProgramParts.length > 0 && modalCurrentPartIndex !== null && modalCurrentPartIndex > 0 ? (() => {
                                     let prevIdx = null;
@@ -764,8 +1693,8 @@ export default function App() {
                                                 style={[styles.modalActionButton, { backgroundColor: '#2196F3' }]}
                                                 onPress={() => { setSelectedSong(prevSong); setModalCurrentPartIndex(prevIdx); }}
                                             >
-                                                <Text style={styles.closeButtonText}>← Prev</Text>
-                                                <Text style={{ color: 'white', fontSize: 12 }} numberOfLines={1}>{prevPart.title} • {prevSong?.title || 'Song'}</Text>
+                                                <Text style={[styles.closeButtonText, { fontSize: 13 }]}>← Prev</Text>
+                                                <Text style={{ color: 'white', fontSize: 10, marginTop: 2 }} numberOfLines={1}>{prevPart.title}</Text>
                                             </TouchableOpacity>
                                         );
                                     }
@@ -777,7 +1706,7 @@ export default function App() {
                                     style={[styles.modalActionButton, styles.modalCloseAction]}
                                     onPress={() => setModalVisible(false)}
                                 >
-                                    <Text style={styles.closeButtonText}>Close</Text>
+                                    <Text style={[styles.closeButtonText, { fontSize: 13 }]}>Close</Text>
                                 </TouchableOpacity>
 
                                 {/* Next Part Button (right) */}
@@ -795,15 +1724,14 @@ export default function App() {
                                                 style={[styles.modalActionButton, { backgroundColor: '#4CAF50' }]}
                                                 onPress={() => { setSelectedSong(nextSong); setModalCurrentPartIndex(nextIdx); }}
                                             >
-                                                <Text style={styles.closeButtonText}>Next →</Text>
-                                                <Text style={{ color: 'white', fontSize: 12 }} numberOfLines={1}>{nextPart.title} • {nextSong?.title || 'Song'}</Text>
+                                                <Text style={[styles.closeButtonText, { fontSize: 13 }]}>Next →</Text>
+                                                <Text style={{ color: 'white', fontSize: 10, marginTop: 2 }} numberOfLines={1}>{nextPart.title}</Text>
                                             </TouchableOpacity>
                                         );
                                     }
                                     return null;
                                 })() : null}
                             </View>
-                        </ScrollView>
                     </View>
                 )}
             </Modal>
@@ -920,7 +1848,18 @@ const styles = StyleSheet.create({
     },
     listContent: { 
         paddingHorizontal: 5, 
-        paddingBottom: 20 
+        paddingBottom: 120 
+    },
+
+    songItemActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginLeft: 8,
+    },
+    songActionButton: {
+        padding: 8,
+        borderRadius: 8,
+        backgroundColor: 'transparent',
     },
 
     setlistItemCard: { 
@@ -953,7 +1892,8 @@ const styles = StyleSheet.create({
     modalView: { 
         flex: 1, 
         padding: 20, 
-        paddingTop: 50, 
+        paddingTop: 4, 
+        paddingBottom: 4,
         backgroundColor: '#fff', 
     },
     modalTitle: { 
@@ -984,8 +1924,10 @@ const styles = StyleSheet.create({
     modalButtonRow: {
         flexDirection: 'row', 
         justifyContent: 'space-between', 
-        marginTop: 10, 
-        gap: 10
+        marginTop: 4, 
+        gap: 4,
+        paddingVertical: 2,
+        paddingHorizontal: 8,
     },
     closeButton: {
         padding: 15,
@@ -1013,8 +1955,8 @@ const styles = StyleSheet.create({
     
     fabContainer: {
         position: 'absolute',
-        bottom: 60,
-        right: 30,
+        bottom: 112,
+        right: 20,
         alignItems: 'flex-end',
     },
     fabOption: {
@@ -1061,6 +2003,7 @@ const styles = StyleSheet.create({
     allSongsHeading: {
         fontSize: 28,
         fontWeight: 'bold',
+
         color: '#333',
         marginBottom: 10,
         textAlign: 'center',
@@ -1104,11 +2047,12 @@ const styles = StyleSheet.create({
         backgroundColor: '#e3eafc',
         borderTopLeftRadius: 12,
         borderTopRightRadius: 12,
-        paddingVertical: 18,
+        paddingVertical: 12,
         paddingHorizontal: 16,
+        paddingTop: 20,
         alignItems: 'center',
         marginHorizontal: -20,
-        marginTop: -50,
+        marginTop: 0,
         marginBottom: 10,
         borderBottomWidth: 1,
         borderBottomColor: '#b3c6e6',
@@ -1133,12 +2077,12 @@ const styles = StyleSheet.create({
     },
     modalActionButton: {
         flex: 1,
-        paddingVertical: 12,
-        paddingHorizontal: 10,
-        borderRadius: 8,
+        paddingVertical: 8,
+        paddingHorizontal: 8,
+        borderRadius: 6,
         alignItems: 'center',
         justifyContent: 'center',
-        marginHorizontal: 6,
+        marginHorizontal: 4,
     },
     modalCloseAction: {
         backgroundColor: '#2196F3',
@@ -1183,6 +2127,7 @@ const styles = StyleSheet.create({
         borderColor: '#e3f0fa',
         padding: 0,
         shadowColor: 'transparent',
+       
         elevation: 0,
     },
     fabOptionMinimal: {
@@ -1216,5 +2161,38 @@ const styles = StyleSheet.create({
         color: 'white',
         fontSize: 24,
         fontWeight: 'bold',
+    },
+});
+
+// Modal / FAB-specific styles reused by in-file modals
+const fabStyles = StyleSheet.create({
+    modalOverlay: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: 'rgba(0,0,0,0.5)',
+    },
+    partModalView: {
+        width: '85%',
+        backgroundColor: 'white',
+        borderRadius: 12,
+        padding: 18,
+        elevation: 10,
+    },
+    partModalTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+        marginBottom: 12,
+        color: '#1a73e8',
+    },
+    partModalInput: {
+        borderWidth: 1,
+        borderColor: '#ddd',
+        padding: 10,
+        borderRadius: 8,
+        marginBottom: 12,
+        fontSize: 16,
+        width: '100%',
+        backgroundColor: '#fff',
     },
 });

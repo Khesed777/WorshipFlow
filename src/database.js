@@ -47,11 +47,28 @@ CREATE TABLE IF NOT EXISTS ProgramPart (
 CREATE TABLE IF NOT EXISTS VoiceMemo (
     memo_id INTEGER PRIMARY KEY NOT NULL,
     setlist_id INTEGER NOT NULL, 
+    part_id INTEGER,
     file_path TEXT NOT NULL,
     date_recorded TEXT,
-    FOREIGN KEY (setlist_id) REFERENCES Setlist (setlist_id)
+    duration INTEGER,
+    FOREIGN KEY (setlist_id) REFERENCES Setlist (setlist_id),
+    FOREIGN KEY (part_id) REFERENCES ProgramPart (part_id)
 );
 `);
+
+    // Ensure older DBs get a part_id column on VoiceMemo if missing
+    try {
+        await database.runAsync(`ALTER TABLE VoiceMemo ADD COLUMN part_id INTEGER;`);
+    } catch (err) {
+        // ignore errors (column likely exists)
+    }
+
+    // Ensure older DBs get a duration column on VoiceMemo if missing
+    try {
+        await database.runAsync(`ALTER TABLE VoiceMemo ADD COLUMN duration INTEGER;`);
+    } catch (err) {
+        // ignore errors (column likely exists)
+    }
 
     return database;
 }
